@@ -8,3 +8,7 @@ description = "Agent-native execution infrastructure: core"
 
 
 [dependencies]
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+tokio-util.workspace = true
