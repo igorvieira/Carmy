@@ -1,0 +1,95 @@
+---
+title: Início rápido
+description: "Crie, rode e teste uma aplicação Carmy em poucos minutos."
+sidebar:
+  order: 2
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+<Steps>
+
+1. **Instale o CLI**
+
+   ```console
+   cargo install --git https://github.com/igorvieira/Carmy carmy-cli
+   ```
+
+2. **Crie uma aplicação**
+
+   ```console
+   carmy new shop
+   cd shop
+   ```
+
+   O projeto segue as convenções do Carmy: `src/main.rs`, um arquivo por tool em
+   `src/tools/` e um `carmy.toml`.
+
+3. **Sirva via HTTP**
+
+   ```console
+   cargo run
+   ```
+
+   ```console
+   $ curl localhost:3000/.well-known/agent
+   {"capabilities":["tools","streaming","idempotency"],"execute_url":"/agent/execute","protocol":"carmy/1","server":"shop","tools_url":"/agent/tools","tools_version":"…"}
+
+   $ curl localhost:3000/agent/execute -H 'content-type: application/json' \
+       -d '{"tool":"hello","arguments":{"name":"Ada"}}'
+   {"execution_id":"exec_…","status":"completed","data":{"message":"Hello, Ada!"},"_agent":{"cacheable":true,"next_actions":[]}}
+   ```
+
+4. **Sirva o mesmo app via MCP**
+
+   ```console
+   cargo run -- mcp
+   ```
+
+   Qualquer cliente MCP, como o Claude Desktop ou o Cursor, já consegue listar e chamar
+   suas tools. Veja [MCP](/pt-br/transports/mcp/).
+
+5. **Rode os testes**
+
+   ```console
+   cargo test
+   ```
+
+   A tool `hello` gerada já vem com testes que a chamam pelo runtime de verdade.
+
+</Steps>
+
+<Aside type="tip">
+  `cargo run -- tools` imprime o catálogo de tools em JSON: exatamente o que os agentes veem.
+</Aside>
+
+## Sua primeira tool
+
+Crie `src/tools/search.rs`:
+
+```rust
+use carmy::prelude::*;
+
+#[derive(Deserialize, JsonSchema)]
+struct SearchInput {
+    /// Search expression.
+    query: String,
+}
+
+#[derive(Serialize, JsonSchema)]
+struct SearchOutput {
+    results: Vec<String>,
+}
+
+#[carmy::tool(description = "Search the catalog", effect = "read", idempotent = true)]
+async fn search(input: SearchInput) -> AgentResult<SearchOutput> {
+    Ok(SearchOutput {
+        results: vec![format!("Result for {}", input.query)],
+    })
+}
+```
+
+Depois adicione `mod search;` em `src/tools/mod.rs`. Só isso: a tool se registra sozinha e
+fica disponível via HTTP e MCP.
+
+Próximo: [Estrutura do projeto](/pt-br/getting-started/project-structure/).

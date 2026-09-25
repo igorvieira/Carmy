@@ -1,0 +1,59 @@
+---
+title: Carmy
+description: "Composable Agent Runtime for Managed Yield. Infraestrutura de execução determinística e segura para agentes de IA, em Rust."
+template: splash
+hero:
+  title: O raciocínio de um LLM pode ser probabilístico. Os efeitos colaterais, não.
+  tagline: O Carmy é a camada de execução entre agentes de IA e sistemas reais. As tools são funções Rust tipadas, com efeitos explícitos, erros legíveis por máquina, retries seguros e cancelamento de verdade, servidas por HTTP e MCP a partir do mesmo código.
+  image:
+    html: |
+      <img class="dark:sl-hidden" src="/brand/lockup.png" width="960" height="720" alt="A chef placing a red cube on a straight rail, above the word CARMY" />
+      <img class="light:sl-hidden" src="/brand/lockup-dark.jpg" width="960" height="720" alt="A chef placing a red cube on a straight rail, above the word CARMY" />
+  actions:
+    - text: Começar
+      link: /pt-br/getting-started/quick-start/
+      icon: right-arrow
+    - text: Por que Carmy
+      link: /pt-br/getting-started/introduction/
+      variant: secondary
+    - text: GitHub
+      link: https://github.com/igorvieira/Carmy
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+```console
+$ cargo install --git https://github.com/igorvieira/Carmy carmy-cli
+$ carmy new shop && cd shop
+$ cargo run           # HTTP
+$ cargo run -- mcp    # as mesmas tools via MCP
+```
+
+<CardGrid>
+  <Card title="Tools tipadas" icon="puzzle">
+    Uma `async fn` com `#[carmy::tool]` vira uma tool. Os JSON Schemas de entrada e saída
+    são derivados dos seus tipos, então os agentes a descobrem sem ler documentação.
+  </Card>
+  <Card title="Efeitos explícitos" icon="warning">
+    Toda tool declara `none`, `read`, `write`, `external_write` ou `destructive`.
+    Tools destrutivas exigem uma confirmação confiável antes de rodar.
+  </Card>
+  <Card title="Retries seguros" icon="random">
+    Agentes repetem chamadas depois de timeouts. Um `request_id` repetido devolve o
+    resultado já registrado. O efeito colateral nunca roda duas vezes.
+  </Card>
+  <Card title="Erros para máquinas" icon="document">
+    Os erros trazem um código estável, uma categoria, `recoverable`, `retryable`,
+    `retry_after` e uma `suggested_action`, e não apenas "Algo deu errado".
+  </Card>
+  <Card title="Streaming e cancelamento" icon="rocket">
+    Um stream de eventos do runtime (servido como SSE via HTTP), prazos de execução e
+    cancelamento propagado a partir de desconexões do cliente e do MCP.
+  </Card>
+  <Card title="Um runtime, vários transportes" icon="setting">
+    HTTP e MCP são adaptadores finos sobre o mesmo runtime e o mesmo código das tools. O
+    core não conhece nenhum dos dois.
+  </Card>
+</CardGrid>
