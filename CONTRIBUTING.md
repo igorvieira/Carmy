@@ -12,6 +12,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 cargo doc --workspace --no-deps
 cargo bench --workspace --no-run
+cargo test -p carmy-cli --test new -- --ignored   # builds a generated application
 ```
 
 Macro diagnostics are snapshot-tested with `trybuild` (`crates/carmy/tests/ui`). After an

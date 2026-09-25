@@ -26,17 +26,34 @@ explicit:
 - **Cancellation is real**: timeouts, client disconnects and MCP cancellations reach the tool's cancellation token.
 - **Transports are adapters**: HTTP and MCP drive the same runtime and the same tool code.
 
-## Quick start
+## Getting started
 
-```toml
-[dependencies]
-carmy = { git = "https://github.com/igorvieira/carmy" }
-serde = { version = "1", features = ["derive"] }
-schemars = "1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```console
+$ cargo install --git https://github.com/igorvieira/carmy carmy-cli
+$ carmy new shop && cd shop
+$ cargo run              # HTTP on http://127.0.0.1:3000/.well-known/agent
+$ cargo run -- mcp       # the same app as an MCP server over stdio
+$ cargo run -- tools     # print the tool catalog
+$ cargo test
 ```
 
+Carmy favors convention over configuration. A new application looks like this:
+
+```text
+shop/
+├── Cargo.toml
+├── carmy.toml          # name, address, timeout; CARMY_* env vars override
+└── src/
+    ├── main.rs         # carmy::run().await
+    └── tools/
+        ├── mod.rs      # mod hello;  (one line per tool)
+        └── hello.rs    # the tool and its tests
+```
+
+A tool is an `async fn` with an attribute:
+
 ```rust
+// src/tools/search.rs
 use carmy::prelude::*;
 
 #[derive(Deserialize, JsonSchema)]
@@ -51,36 +68,75 @@ struct SearchOutput {
 }
 
 #[carmy::tool(description = "Search the catalog", effect = "read", idempotent = true)]
-async fn search(_ctx: AgentContext, input: SearchInput) -> AgentResult<SearchOutput> {
+async fn search(input: SearchInput) -> AgentResult<SearchOutput> {
     Ok(SearchOutput {
         results: vec![format!("Result for {}", input.query)],
     })
 }
-
-#[tokio::main]
-async fn main() -> Result<(), carmy::Error> {
-    Carmy::new().tool(search).listen("0.0.0.0:3000").await
-}
 ```
 
-```console
-$ curl localhost:3000/.well-known/agent
-{"capabilities":["tools","streaming","idempotency"],"execute_url":"/agent/execute","protocol":"carmy/1","server":"carmy","tools_url":"/agent/tools","tools_version":"3762…"}
+To add it, put `mod search;` in `src/tools/mod.rs`. The tool registers itself, and
+agents discover it over HTTP and MCP:
 
+```console
 $ curl localhost:3000/agent/execute -H 'content-type: application/json' \
     -d '{"tool":"search","arguments":{"query":"mechanical keyboard"}}'
 {"execution_id":"exec_…","status":"completed","data":{"results":["Result for mechanical keyboard"]},"_agent":{"cacheable":true,"next_actions":[]}}
 ```
 
-To serve the same tools over MCP (stdio), enable the `mcp` feature and call
-`Carmy::new().tool(search).serve_mcp_stdio().await`.
+Test a tool next to its code, through the same runtime pipeline that agents use:
 
-Runnable examples:
+```rust
+use carmy::serde_json::json;
 
-- `cargo run -p hello-agent`: drives the runtime in-process, with no transport.
-- `cargo run -p tool-server`: serves the same tools over HTTP. Add `-- --mcp` to serve them over MCP stdio.
+#[tokio::test]
+async fn searches() {
+    let result = carmy::testing::execute(search, json!({ "query": "x" })).await;
+    assert_eq!(result.outcome.unwrap()["results"][0], "Result for x");
+}
+```
+
+### Dependencies: `State<T>`
+
+Register shared dependencies once, then ask for them by type:
+
+```rust
+#[carmy::tool(description = "Place an order", effect = "write")]
+async fn create_order(State(db): State<Db>, input: NewOrder) -> AgentResult<Order> {
+    db.insert(input).await
+}
+
+#[tokio::main]
+async fn main() -> carmy::Result {
+    let db = Db::connect("postgres://localhost/shop").await.expect("database");
+    carmy::app().state(db).run().await
+}
+```
+
+A missing dependency is reported at startup (`MISSING_STATE: tool create_order requires
+State<shop::Db>`), never on a request. `State` values are cloned per execution, so pass
+`Arc`s, pools or clients.
+
+### What is automatic, and how to opt out
+
+| convention                                       | explicit alternative |
+|--------------------------------------------------|----------------------|
+| `#[carmy::tool]` registers the tool in `carmy::app()` | `#[carmy::tool(register = false)]` and `.tool(x)` |
+| `carmy::app()` reads `carmy.toml` and `CARMY_*`  | `Carmy::new()`, with no file, env or auto-registration |
+| `run()` chooses `server`, `mcp` or `tools` from the first argument | `.listen(addr)`, `.serve_mcp_stdio()`, `.build()` |
+| tracing to stderr                                | `default-features = false` and your own subscriber |
+
+Auto-registration collects tools at link time (via `linkme`), so it only covers crates
+linked into the binary. `.tool(x)` works everywhere.
+
+Runnable examples in this repository:
+
+- `cargo run -p tool-server`: the conventional style, with `State`. Add `-- mcp` to serve it over MCP.
+- `cargo run -p hello-agent`: the explicit layer. It drives the runtime in-process, with no transport.
 
 ## Tools
+
+Everything below is what the conventions build on.
 
 A tool implements `carmy::Tool`:
 
@@ -94,10 +150,14 @@ pub trait Tool: Send + Sync + 'static {
 }
 ```
 
-`#[carmy::tool]` generates this for an `async fn(AgentContext, Input) -> AgentResult<Output>`.
-The generated type is a unit struct named after the function. Its metadata holds the name,
-description, input and output schemas, `effect`, `idempotent`, `parallel_safe` and
-`confirmation`. Macro attributes:
+`#[carmy::tool]` generates this for an `async fn` that returns `AgentResult<Output>` and
+takes any of the following, in any order:
+
+- an optional `AgentContext`
+- any number of `State<T>`
+- at most one input. A tool with no input accepts `{}`.
+
+The generated type is a unit struct named after the function. Macro attributes:
 
 | attribute       | values                                                         | default   |
 |-----------------|----------------------------------------------------------------|-----------|
@@ -106,14 +166,15 @@ description, input and output schemas, `effect`, `idempotent`, `parallel_safe` a
 | `idempotent`    | bool                                                           | `false`   |
 | `parallel_safe` | bool (`false` serializes calls to this tool)                   | `false`   |
 | `confirmation`  | `none`, `required`                                             | `none`    |
+| `register`      | bool (auto-registration in `carmy::app()`)                     | `true`    |
 
 A malformed signature, an unknown attribute, or a type without `JsonSchema` fails at
 compile time with a pointed error. These cases are covered by `trybuild` tests.
 
-**Application state** belongs to the tool value, not the framework context. Implement
-`Tool` on a struct that holds your dependencies (see `examples/tool-server`).
 `AgentContext` holds only framework data: execution and request IDs, session, principal,
-permissions, metadata and the cancellation token. It is not a service locator.
+permissions, metadata and the cancellation token. Application dependencies go in
+`State<T>`, or in a struct that implements `Tool` directly. The context is never a
+service locator.
 
 ## Effects
 
@@ -233,7 +294,8 @@ not support.
 
 | crate                 | role                                                                  |
 |-----------------------|-----------------------------------------------------------------------|
-| `carmy`               | facade: `Carmy` builder, `prelude`, feature-gated transports          |
+| `carmy`               | facade: `carmy::app()`, `State`, config, `testing`, `prelude`, feature-gated transports |
+| `carmy-cli`           | `carmy new`                                                           |
 | `carmy-core`          | domain: `Tool`, `ToolMetadata`, `Effect`, `AgentError`, `AgentContext`, execution types |
 | `carmy-schema`        | JSON Schema generation                                                |
 | `carmy-macros`        | `#[carmy::tool]`                                                      |
@@ -261,8 +323,8 @@ Each execution runs in a `carmy.execution` tracing span with these fields:
 - `status`, `duration_ms` and `replayed`
 - `error_code`, when the execution fails
 
-Arguments and outputs are never recorded. `carmy_observability::init()` installs a stderr
-subscriber. For OpenTelemetry, compose `carmy_observability::fmt_layer()` with a
+Arguments and outputs are never recorded. `carmy::run()` installs a stderr subscriber
+(`carmy_observability::init()`). For OpenTelemetry, compose `carmy_observability::fmt_layer()` with a
 `tracing-opentelemetry` layer; Carmy itself does not depend on OpenTelemetry.
 
 ## Security

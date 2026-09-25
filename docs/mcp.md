@@ -4,10 +4,19 @@
 [`rmcp`](https://github.com/modelcontextprotocol/rust-sdk). Protocol version negotiation
 is handled by `rmcp`.
 
+In a conventional application, run it with `cargo run -- mcp`. That calls
+`carmy::run()`, which serves MCP over stdio. To point an MCP client such as Claude
+Desktop at the built binary:
+
+```json
+{ "mcpServers": { "shop": { "command": "/path/to/shop/target/release/shop", "args": ["mcp"] } } }
+```
+
+Explicitly:
+
 ```rust
 let runtime = Carmy::new().tool(search).build()?;
 carmy::mcp::McpServer::new(runtime).serve_stdio().await?;
-// or: Carmy::new().tool(search).serve_mcp_stdio().await?
 ```
 
 `McpServer` implements `rmcp::ServerHandler`, so it can be served over any `rmcp`

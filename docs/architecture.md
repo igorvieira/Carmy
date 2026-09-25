@@ -63,6 +63,17 @@ A transport has three jobs:
 Runtime types never go on the wire directly. HTTP has `ResultDto`, `ToolDto` and SSE
 payloads. MCP has `Tool`, `CallToolResult` and annotations.
 
+## Conventions: the `carmy` facade
+
+The Rails-style layer lives only in the facade. The core and runtime do not know about
+it.
+
+- **`State<T>`:** application dependencies, kept in a `StateMap` owned by the `Carmy` builder. `#[carmy::tool]` generates a hidden tool struct holding the resolved values. `IntoTool` resolves them when the runtime is built, so a missing dependency is a startup error. State never passes through `AgentContext`.
+- **Auto-registration:** `#[carmy::tool]` adds a `fn(Carmy) -> Carmy` to a `linkme` distributed slice. `carmy::app()` applies all of them, while `Carmy::new()` applies none.
+- **Configuration:** `carmy.toml`, overridden by `CARMY_*` variables, is read by `carmy::app()` only.
+- **`run()`:** picks a transport from the first command-line argument. Each transport stays an ordinary adapter.
+- **`carmy-cli`:** only writes files. Generated projects depend on `carmy` like any other application.
+
 ## Review checklist
 
 Check these for every change:
