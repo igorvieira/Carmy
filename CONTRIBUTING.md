@@ -27,7 +27,8 @@ intentional change to an error message, regenerate the snapshots with
 - Accompany a behavior change with a test of the contract or failure mode it affects.
 - Do not add performance claims that `cargo bench` cannot reproduce.
 
-See [docs/architecture.md](docs/architecture.md) for the review checklist.
+See the [architecture review checklist](https://carmy-pi.vercel.app/reference/architecture/#review-checklist).
+The documentation website lives in `website/` (`pnpm install && pnpm dev`).
 
 ## Commits
 

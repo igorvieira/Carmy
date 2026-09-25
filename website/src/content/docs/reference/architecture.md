@@ -75,3 +75,14 @@ A future plan (a DAG of tool calls with `$step.field` references) needs no new c
 - `parallel_safe` decides which steps can run concurrently.
 - `effect` and `idempotent` decide what can be retried or cached.
 - Per-step `request_id`s (`<plan>/<step>`) make resuming a failed plan safe.
+
+## Review checklist
+
+Check these for every change:
+
+- Is the concept part of the domain, or part of a transport?
+- Does HTTP or MCP leak into the runtime or the core?
+- Does application state leak into `AgentContext`?
+- Is a new abstraction needed now, or only allowed by the architecture?
+- Does it prevent execution plans or a new transport later?
+- Does it make the common case harder?

@@ -77,3 +77,14 @@ conceitos novos:
 - `parallel_safe` decide quais passos podem rodar em paralelo.
 - `effect` e `idempotent` decidem o que pode ser repetido ou guardado em cache.
 - `request_id`s por passo (`<plan>/<step>`) tornam seguro retomar um plano que falhou.
+
+## Checklist de revisão
+
+Confira em toda mudança:
+
+- O conceito faz parte do domínio ou de um transporte?
+- HTTP ou MCP estão vazando para o runtime ou para o core?
+- Estado da aplicação está vazando para o `AgentContext`?
+- A nova abstração é necessária agora, ou apenas permitida pela arquitetura?
+- Ela impede execution plans ou um novo transporte no futuro?
+- Ela torna o caso comum mais difícil?

@@ -9,6 +9,8 @@
 
 Agent-native execution infrastructure for Rust.
 
+**Documentation:** [carmy-pi.vercel.app](https://carmy-pi.vercel.app), in English and Brazilian Portuguese.
+
 Carmy is **not** another general-purpose HTTP framework. It does not route web pages or
 compete with Axum, Actix or Hyper; it uses them. Carmy is the execution layer between AI
 agents and real systems: typed tools with explicit side effects, machine-readable errors,
@@ -276,7 +278,7 @@ keep their idempotency reservation, so the uncertainty stays visible.
 `carmy-mcp` adapts the runtime to the Model Context Protocol using the official `rmcp`
 SDK. It supports `initialize`, `ping`, `tools/list`, `tools/call` and request
 cancellation. Effects map to MCP tool annotations, and the exact Carmy metadata is kept in
-the tool's `_meta`. See [docs/mcp.md](docs/mcp.md) for the full mapping and what v0.1 does
+the tool's `_meta`. See [the MCP page](https://carmy-pi.vercel.app/transports/mcp/) for the full mapping and what v0.1 does
 not support.
 
 ## Architecture
@@ -319,8 +321,8 @@ The invariants:
 - Retries are safe, and execution is observable.
 - Transports are replaceable.
 
-More detail is in [docs/architecture.md](docs/architecture.md), and the HTTP wire format is
-in [docs/protocol.md](docs/protocol.md).
+More detail is in [Architecture](https://carmy-pi.vercel.app/reference/architecture/), and the HTTP wire format is
+in [HTTP](https://carmy-pi.vercel.app/transports/http/).
 
 ## Observability
 
@@ -365,7 +367,7 @@ cargo bench -p carmy-benches
 The benchmarks measure runtime dispatch against a direct tool call, result serialization,
 schema and catalog generation, the in-process HTTP round trip, and 64 concurrent read-only
 executions. The fixture tool does no work, so the numbers show Carmy's own overhead. See
-[docs/benchmarks.md](docs/benchmarks.md). This project makes no performance claims that
+[Benchmarks](https://carmy-pi.vercel.app/reference/benchmarks/). This project makes no performance claims that
 these benchmarks cannot reproduce.
 
 ## Roadmap

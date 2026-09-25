@@ -9,7 +9,7 @@ const group = (label, pt, directory) => ({
 });
 
 export default defineConfig({
-  site: 'https://carmy.vercel.app',
+  site: 'https://carmy-pi.vercel.app',
   integrations: [
     starlight({
       title: 'Carmy',
