@@ -1,0 +1,49 @@
+/* Carmy palette: Rust Clay accent, Steel Black, Kitchen Light, Graphite. */
+:root {
+  --sl-color-accent-low: #3a1510;
+  --sl-color-accent: #d9543f;
+  --sl-color-accent-high: #f6c9c1;
+  --sl-color-white: #f7f4ed;
+  --sl-color-gray-1: #e6e2d9;
+  --sl-color-gray-2: #c4c7cd;
+  --sl-color-gray-3: #9aa0aa;
+  --sl-color-gray-4: #6b7280;
+  --sl-color-gray-5: #2c2f35;
+  --sl-color-gray-6: #1a1c1f;
+  --sl-color-black: #0a0909; /* matches the dark illustration's background */
+}
+:root[data-theme='light'] {
+  --sl-color-accent-low: #f3d5cf;
+  --sl-color-accent: #b23a2b;
+  --sl-color-accent-high: #5c1b13;
+  --sl-color-white: #0e0f10;
+  --sl-color-gray-1: #1a1c1f;
+  --sl-color-gray-2: #2c2f35;
+  --sl-color-gray-3: #4b5563;
+  --sl-color-gray-4: #6b7280;
+  --sl-color-gray-5: #cfccc4;
+  --sl-color-gray-6: #ece8df;
+  --sl-color-gray-7: #f2efe8;
+  --sl-color-black: #f7f4ed;
+}
+.hero .hero-html {
+  width: min(100%, 34rem);
+}
+.hero .hero-html img {
+  width: 100%;
+  height: auto;
+}
+.site-title img {
+  border-radius: 6px;
+}
+/* Primary actions always use Rust Clay. */
+.sl-link-button.primary {
+  background: #b23a2b;
+  border-color: #b23a2b;
+  color: #f7f4ed;
+}
+.sl-link-button.primary:hover {
+  background: #9a3023;
+  border-color: #9a3023;
+  color: #f7f4ed;
+}
