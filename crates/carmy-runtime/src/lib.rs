@@ -109,6 +109,11 @@ impl Runtime {
     }
     /// Registration is fallible: names and schemas must be valid and unique.
     pub fn tool<T: Tool>(mut self, tool: T) -> AgentResult<Self> {
+        self.register(tool)?;
+        Ok(self)
+    }
+    /// Like [`Runtime::tool`], keeping the runtime usable when registration fails.
+    pub fn register<T: Tool>(&mut self, tool: T) -> AgentResult<()> {
         let metadata = tool.metadata();
         if metadata.name.is_empty()
             || metadata.name.len() > 128
@@ -154,7 +159,7 @@ impl Runtime {
                 serial: Mutex::new(()),
             },
         );
-        Ok(self)
+        Ok(())
     }
     pub fn tools(&self) -> Vec<ToolMetadata> {
         self.tools.values().map(|t| t.metadata.clone()).collect()

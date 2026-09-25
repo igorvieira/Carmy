@@ -90,6 +90,27 @@ impl AgentError {
             details: None,
         }
     }
+    /// The agent can fix the request (e.g. change arguments) and continue.
+    pub fn recoverable(mut self) -> Self {
+        self.recoverable = true;
+        self
+    }
+    /// Retrying the same request may succeed, optionally after `seconds`.
+    pub fn retryable(mut self, after_seconds: Option<u64>) -> Self {
+        self.retryable = true;
+        self.recoverable = true;
+        self.retry_after = after_seconds;
+        self
+    }
+    /// Name of a tool the agent should consider calling next.
+    pub fn suggest(mut self, action: impl Into<String>) -> Self {
+        self.suggested_action = Some(action.into());
+        self
+    }
+    pub fn details(mut self, details: Value) -> Self {
+        self.details = Some(Box::new(details));
+        self
+    }
 }
 impl std::fmt::Display for AgentError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -211,6 +232,19 @@ mod tests {
         for status in [ExecutionStatus::Completed, ExecutionStatus::TimedOut] {
             assert_eq!(serde_json::to_value(status).unwrap(), status.as_str());
         }
+    }
+    #[test]
+    fn error_builders_set_machine_semantics() {
+        let e = AgentError::new("USER_NOT_FOUND", "No such user", ErrorCategory::NotFound)
+            .recoverable()
+            .suggest("search_users");
+        let v = serde_json::to_value(&e).unwrap();
+        assert_eq!(v["recoverable"], true);
+        assert_eq!(v["retryable"], false);
+        assert_eq!(v["suggested_action"], "search_users");
+        let e = AgentError::new("BUSY", "Try later", ErrorCategory::Capacity).retryable(Some(5));
+        assert!(e.recoverable && e.retryable);
+        assert_eq!(e.retry_after, Some(5));
     }
     #[test]
     fn cancellation_is_shared() {

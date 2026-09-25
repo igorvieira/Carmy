@@ -290,9 +290,10 @@ fn sse_event(event: ExecutionEvent, reusable: bool) -> Event {
     };
     Event::default().event(name).data(data.to_string())
 }
+/// Bind `address` and serve [`router`] until the process stops.
 pub async fn serve(
     runtime: Arc<Runtime>,
-    address: &str,
+    address: impl tokio::net::ToSocketAddrs,
     server: impl Into<String>,
 ) -> std::io::Result<()> {
     let listener = tokio::net::TcpListener::bind(address).await?;
