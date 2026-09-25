@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/lockup-dark.png">
+    <img alt="Carmy: Composable Agent Runtime for Managed Yield" src="assets/brand/lockup.png" width="420">
+  </picture>
+</p>
+
 # Carmy
 
 Agent-native execution infrastructure for Rust.
