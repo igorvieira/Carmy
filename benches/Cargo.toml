@@ -1,0 +1,30 @@
+[package]
+name = "carmy-benches"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+autobenches = false
+
+[lib]
+path = "lib.rs"
+bench = false
+
+[[bench]]
+name = "runtime"
+path = "runtime.rs"
+harness = false
+
+[dependencies]
+carmy = { path = "../crates/carmy" }
+serde.workspace = true
+schemars.workspace = true
+
+[dev-dependencies]
+criterion = { version = "0.8", features = ["async_tokio"] }
+axum = "0.8"
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+futures-util = "0.3"
+serde_json.workspace = true
+tokio.workspace = true
