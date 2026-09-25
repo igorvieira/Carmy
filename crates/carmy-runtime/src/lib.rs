@@ -1,7 +1,12 @@
 //! Transport-independent execution and policy enforcement.
+pub mod idempotency;
 use carmy_core::*;
+use futures_util::FutureExt;
+pub use idempotency::*;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc};
+use std::{panic::AssertUnwindSafe, time::Duration};
 use tokio::sync::Mutex;
 
 type ToolFuture<'a> = Pin<Box<dyn Future<Output = AgentResult<Value>> + Send + 'a>>;
@@ -76,6 +81,8 @@ impl ExecutionPolicy for RequireToolPermission {
 pub struct Runtime {
     tools: BTreeMap<String, Registered>,
     policies: Vec<Arc<dyn ExecutionPolicy>>,
+    store: Arc<dyn IdempotencyStore>,
+    timeout: Duration,
 }
 impl Default for Runtime {
     fn default() -> Self {
@@ -87,6 +94,8 @@ impl Runtime {
         Self {
             tools: BTreeMap::new(),
             policies: vec![Arc::new(SafePolicy)],
+            store: Arc::new(InMemoryIdempotencyStore::default()),
+            timeout: Duration::from_secs(30),
         }
     }
     pub fn policy(mut self, policy: impl ExecutionPolicy + 'static) -> Self {
@@ -145,28 +154,103 @@ impl Runtime {
     pub fn tools(&self) -> Vec<ToolMetadata> {
         self.tools.values().map(|t| t.metadata.clone()).collect()
     }
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+    pub fn idempotency_store(mut self, store: Arc<dyn IdempotencyStore>) -> Self {
+        self.store = store;
+        self
+    }
     pub async fn execute(&self, mut request: ExecutionRequest) -> ExecutionResult {
         request.context.execution_id = request.execution_id.clone();
         request.context.request_id = request.request_id.clone();
-        self.run(request).await
-    }
-    async fn run(&self, request: ExecutionRequest) -> ExecutionResult {
+        let cancellation = request.context.cancellation.clone();
+        let cancel_on_drop = cancellation.clone().drop_guard();
         let id = request.execution_id.clone();
-        let outcome = async {
-            let registered = self
-                .tools
-                .get(&request.tool)
-                .ok_or_else(|| error("TOOL_NOT_FOUND", "Unknown tool", ErrorCategory::NotFound))?;
-            for policy in &self.policies {
-                policy.check(&request.context, &registered.metadata)?;
+        let response = match self.run(request).await {
+            Ok(result) => result,
+            Err(e) => result(id, Err(e)),
+        };
+        cancel_on_drop.disarm();
+        response
+    }
+    async fn run(&self, request: ExecutionRequest) -> AgentResult<ExecutionResult> {
+        let registered = self
+            .tools
+            .get(&request.tool)
+            .ok_or_else(|| error("TOOL_NOT_FOUND", "Unknown tool", ErrorCategory::NotFound))?;
+        for policy in &self.policies {
+            policy.check(&request.context, &registered.metadata)?;
+        }
+        if request.execution_id.is_empty()
+            || request
+                .request_id
+                .as_ref()
+                .is_some_and(|s| s.is_empty() || s.len() > 256)
+        {
+            return Err(error(
+                "INVALID_ID",
+                "Execution and request IDs must be nonempty; request IDs are limited to 256 bytes",
+                ErrorCategory::Validation,
+            ));
+        }
+        if !registered.input.is_valid(&request.arguments) {
+            return Err(error(
+                "INVALID_ARGUMENTS",
+                "Arguments do not match the input schema",
+                ErrorCategory::Validation,
+            ));
+        }
+        if request.context.cancellation.is_cancelled() {
+            return Err(error(
+                "CANCELLED",
+                "Execution cancelled before invocation",
+                ErrorCategory::Cancelled,
+            ));
+        }
+        let key = request
+            .request_id
+            .as_ref()
+            .map(|request_id| IdempotencyKey {
+                principal: request.context.principal.clone(),
+                session: request.context.session.clone(),
+                request_id: request_id.clone(),
+            });
+        let fingerprint = format!(
+            "{:x}",
+            Sha256::digest(
+                serde_json::to_vec(&serde_json::json!([
+                    request.tool,
+                    request.arguments,
+                    request.metadata,
+                    request.context.metadata
+                ]))
+                .expect("JSON values serialize")
+            )
+        );
+        if let Some(key) = &key {
+            match self.store.reserve(key, &fingerprint).await? {
+                Reservation::Acquired => {}
+                Reservation::Replay(result) => return Ok(result),
+                Reservation::Conflict => {
+                    return Err(error(
+                        "IDEMPOTENCY_CONFLICT",
+                        "Request identity was used with different tool or input",
+                        ErrorCategory::Conflict,
+                    ));
+                }
+                Reservation::InProgress => {
+                    return Err(error(
+                        "EXECUTION_UNCERTAIN",
+                        "Execution is running or was interrupted; reconcile before retrying",
+                        ErrorCategory::Conflict,
+                    ));
+                }
             }
-            if !registered.input.is_valid(&request.arguments) {
-                return Err(error(
-                    "INVALID_ARGUMENTS",
-                    "Arguments do not match the input schema",
-                    ErrorCategory::Validation,
-                ));
-            }
+        }
+        let cancellation = request.context.cancellation.clone();
+        let work = async {
             let _guard = if !registered.metadata.parallel_safe {
                 Some(registered.serial.lock().await)
             } else {
@@ -184,11 +268,32 @@ impl Runtime {
                 ));
             }
             Ok(value)
+        };
+        let outcome = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => Err(error("CANCELLED", "Execution cancelled; external effects may have committed", ErrorCategory::Cancelled)),
+            _ = tokio::time::sleep(self.timeout) => { cancellation.cancel(); Err(error("TIMEOUT", "Execution timed out; external effects may have committed", ErrorCategory::Timeout)) },
+            result = AssertUnwindSafe(work).catch_unwind() => result.unwrap_or_else(|_| Err(error("TOOL_PANIC", "Tool panicked; external effects may have committed", ErrorCategory::Internal))),
+        };
+        let result = result(request.execution_id, outcome);
+        if let Some(key) = &key {
+            self.store.complete(key, &fingerprint, &result).await?;
         }
-        .await;
-        result(id, outcome)
+        Ok(result)
     }
 }
+/// Create a request with a fresh execution ID; callers supply a stable request ID for retries.
+pub fn execution_request(tool: impl Into<String>, arguments: Value) -> ExecutionRequest {
+    ExecutionRequest {
+        execution_id: format!("exec_{}", uuid::Uuid::new_v4()),
+        request_id: None,
+        tool: tool.into(),
+        arguments,
+        context: AgentContext::default(),
+        metadata: BTreeMap::new(),
+    }
+}
+
 pub(crate) fn error(code: &str, message: &str, category: ErrorCategory) -> AgentError {
     AgentError::new(code, message, category)
 }

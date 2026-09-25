@@ -77,3 +77,116 @@ fn duplicate_names_are_rejected() {
             .is_err()
     );
 }
+
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
+struct Write {
+    calls: Arc<AtomicUsize>,
+    delay: Duration,
+}
+impl Tool for Write {
+    type Input = String;
+    type Output = String;
+    fn metadata(&self) -> ToolMetadata {
+        let mut m = Echo(Effect::Write).metadata();
+        m.idempotent = false;
+        m
+    }
+    async fn execute(&self, _: AgentContext, input: String) -> AgentResult<String> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        tokio::time::sleep(self.delay).await;
+        Ok(input)
+    }
+}
+#[tokio::test]
+async fn retries_conflicts_and_scopes() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let rt = Runtime::new()
+        .tool(Write {
+            calls: calls.clone(),
+            delay: Duration::ZERO,
+        })
+        .unwrap();
+    let mut req = request(json!("write"));
+    req.request_id = Some("abc".into());
+    let a = rt.execute(req.clone()).await;
+    let b = rt.execute(req.clone()).await;
+    assert_eq!(a, b);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    req.arguments = json!("changed");
+    assert_eq!(
+        rt.execute(req.clone()).await.outcome.unwrap_err().code,
+        "IDEMPOTENCY_CONFLICT"
+    );
+    req.context.principal = Some("another".into());
+    assert!(rt.execute(req).await.outcome.is_ok());
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+#[tokio::test]
+async fn concurrent_duplicates_are_reserved_atomically() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let rt = Runtime::new()
+        .tool(Write {
+            calls: calls.clone(),
+            delay: Duration::from_millis(20),
+        })
+        .unwrap();
+    let mut req = request(json!("write"));
+    req.request_id = Some("abc".into());
+    let (a, b) = tokio::join!(rt.execute(req.clone()), rt.execute(req));
+    assert!(a.outcome.is_ok());
+    assert_eq!(b.outcome.unwrap_err().code, "EXECUTION_UNCERTAIN");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+#[tokio::test]
+async fn timeout_and_cancellation_never_repeat_uncertain_writes() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let rt = Runtime::new()
+        .timeout(Duration::from_millis(5))
+        .tool(Write {
+            calls: calls.clone(),
+            delay: Duration::from_secs(10),
+        })
+        .unwrap();
+    let mut req = request(json!("write"));
+    req.request_id = Some("abc".into());
+    let timed = rt.execute(req.clone()).await;
+    assert_eq!(timed.status, ExecutionStatus::TimedOut);
+    // New transport request has its own cancellation token.
+    req.context = AgentContext::default();
+    assert_eq!(rt.execute(req).await, timed);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let req = request(json!("write"));
+    req.context.cancellation.cancel();
+    assert_eq!(rt.execute(req).await.status, ExecutionStatus::Cancelled);
+}
+#[tokio::test]
+async fn dropping_execution_cancels_and_retains_reservation() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let rt = Runtime::new()
+        .tool(Write {
+            calls: calls.clone(),
+            delay: Duration::from_secs(10),
+        })
+        .unwrap();
+    let mut req = request(json!("write"));
+    req.request_id = Some("abc".into());
+    let token = req.context.cancellation.clone();
+    {
+        let execution = rt.execute(req.clone());
+        tokio::pin!(execution);
+        tokio::select! { _ = &mut execution => panic!("unexpected completion"), _ = tokio::time::sleep(Duration::from_millis(5)) => {} }
+    }
+    assert!(token.is_cancelled());
+    req.context = AgentContext::default();
+    assert_eq!(
+        rt.execute(req).await.outcome.unwrap_err().code,
+        "EXECUTION_UNCERTAIN"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
