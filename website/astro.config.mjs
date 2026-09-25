@@ -24,6 +24,7 @@ export default defineConfig({
       },
       social: [
         { icon: 'github', label: 'GitHub', href: 'https://github.com/igorvieira/Carmy' },
+        { icon: 'heart', label: 'Sponsor', href: 'https://github.com/sponsors/igorvieira' },
         // { icon: 'discord', label: 'Discord', href: 'https://discord.gg/...' },
       ],
       editLink: { baseUrl: 'https://github.com/igorvieira/Carmy/edit/main/website/' },
@@ -33,6 +34,7 @@ export default defineConfig({
         group('Guides', 'Guias', 'guides'),
         group('Transports', 'Transportes', 'transports'),
         group('Reference', 'Referência', 'reference'),
+        { label: 'Sponsor', translations: { 'pt-BR': 'Apoie' }, link: '/sponsor/' },
       ],
     }),
   ],

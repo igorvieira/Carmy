@@ -11,6 +11,7 @@
   <a href="https://carmy-pi.vercel.app"><img alt="Documentation" src="https://img.shields.io/badge/docs-carmy--pi.vercel.app-0E0F10?logo=astro&logoColor=white"></a>
   <a href="https://modelcontextprotocol.io"><img alt="MCP" src="https://img.shields.io/badge/MCP-supported-6B7280"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-6B7280"></a>
+  <a href="https://github.com/sponsors/igorvieira"><img alt="Sponsor" src="https://img.shields.io/badge/sponsor-%E2%99%A5-B23A2B?logo=githubsponsors&logoColor=white"></a>
 </p>
 
 # Carmy
@@ -388,6 +389,17 @@ these benchmarks cannot reproduce.
 
 Carmy will not add its own async runtime, HTTP parser, TLS stack, ORM, workflow engine,
 agent memory, LLM abstraction or prompt framework.
+
+## Sponsor
+
+Carmy is independent, MIT-licensed open source. Sponsorship pays for maintenance time,
+new transports and adapters, documentation in English and Portuguese, and keeping
+releases and CI healthy.
+
+**[Sponsor Carmy on GitHub →](https://github.com/sponsors/igorvieira)**
+
+Companies that depend on Carmy can sponsor at a tier that includes their logo in this
+README and on the [documentation site](https://carmy-pi.vercel.app/sponsor/).
 
 ## License
 
