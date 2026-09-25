@@ -8,3 +8,5 @@ description = "Agent-native execution infrastructure: schema"
 
 
 [dependencies]
+serde_json.workspace = true
+schemars.workspace = true

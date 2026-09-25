@@ -1,0 +1,5 @@
+error: tool must be a safe async fn(context: AgentContext, input: Input) -> AgentResult<Output> without generics
+ --> tests/ui/invalid_signature.rs:2:1
+  |
+2 | fn broken() {}
+  | ^^^^^^^^^^^
