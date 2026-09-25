@@ -223,6 +223,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "carmy-cli"
+version = "0.1.0"
+
+[[package]]
 name = "carmy-core"
 version = "0.1.0"
 dependencies = [

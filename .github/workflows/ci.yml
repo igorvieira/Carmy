@@ -15,4 +15,6 @@ jobs:
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --workspace --all-features
       - run: cargo doc --workspace --no-deps
+      - name: Generated application builds and passes its tests
+        run: cargo test -p carmy-cli --test new -- --ignored
       - run: cargo bench --workspace --no-run
