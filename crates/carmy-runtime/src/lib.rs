@@ -154,6 +154,9 @@ impl Runtime {
     pub fn tools(&self) -> Vec<ToolMetadata> {
         self.tools.values().map(|t| t.metadata.clone()).collect()
     }
+    pub fn metadata(&self, tool: &str) -> Option<&ToolMetadata> {
+        self.tools.get(tool).map(|t| &t.metadata)
+    }
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self

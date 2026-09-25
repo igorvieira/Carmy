@@ -8,3 +8,15 @@ description = "Agent-native execution infrastructure: http"
 
 
 [dependencies]
+carmy-core = { path = "../carmy-core", version = "0.1.0" }
+carmy-runtime = { path = "../carmy-runtime", version = "0.1.0" }
+axum = "0.8"
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+sha2 = "0.10"
+
+[dev-dependencies]
+schemars.workspace = true
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
