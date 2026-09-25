@@ -5,6 +5,14 @@
   </picture>
 </p>
 
+<p align="center">
+  <a href="https://github.com/igorvieira/Carmy/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/igorvieira/Carmy/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+  <a href="https://www.rust-lang.org"><img alt="Built with Rust" src="https://img.shields.io/badge/built%20with-Rust-B23A2B?logo=rust&logoColor=white"></a>
+  <a href="https://carmy-pi.vercel.app"><img alt="Documentation" src="https://img.shields.io/badge/docs-carmy--pi.vercel.app-0E0F10?logo=astro&logoColor=white"></a>
+  <a href="https://modelcontextprotocol.io"><img alt="MCP" src="https://img.shields.io/badge/MCP-supported-6B7280"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-6B7280"></a>
+</p>
+
 # Carmy
 
 Agent-native execution infrastructure for Rust.
