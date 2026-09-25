@@ -82,3 +82,52 @@ async fn facade_builds_runtime_and_reports_registration_errors() {
         Err(carmy::Error::Registration(e)) if e.code == "DUPLICATE_TOOL"
     ));
 }
+#[derive(Clone)]
+struct Greeting(&'static str);
+#[derive(Serialize, JsonSchema)]
+struct Greeted {
+    message: String,
+}
+/// Greets with the configured greeting.
+#[carmy::tool(description = "Greet", effect = "none")]
+async fn greet(State(greeting): State<Greeting>, input: Input) -> AgentResult<Greeted> {
+    Ok(Greeted {
+        message: format!("{} {}", greeting.0, input.query),
+    })
+}
+#[carmy::tool(effect = "read")]
+async fn ping(ctx: AgentContext) -> AgentResult<String> {
+    Ok(ctx.execution_id)
+}
+#[tokio::test]
+async fn state_is_injected_and_checked_at_startup() {
+    let app = Carmy::new().state(Greeting("Hello"));
+    let result =
+        carmy::testing::execute_with(app, greet, serde_json::json!({"query": "Ada"})).await;
+    assert_eq!(result.outcome.unwrap()["message"], "Hello Ada");
+    let missing = Carmy::new().tool(greet).build();
+    let Err(carmy::Error::Registration(e)) = missing else {
+        panic!("missing state must fail at startup")
+    };
+    assert_eq!(e.code, "MISSING_STATE");
+    assert!(e.message.contains("Greeting"), "{}", e.message);
+}
+#[tokio::test]
+async fn tools_without_input_accept_empty_arguments() {
+    let runtime = Carmy::new().tool(ping).build().unwrap();
+    assert_eq!(ping.metadata().input_schema["type"], "object");
+    let ok = runtime
+        .execute(carmy::runtime::execution_request(
+            "ping",
+            serde_json::json!({}),
+        ))
+        .await;
+    assert!(ok.outcome.unwrap().as_str().unwrap().starts_with("exec_"));
+    let extra = runtime
+        .execute(carmy::runtime::execution_request(
+            "ping",
+            serde_json::json!({"x": 1}),
+        ))
+        .await;
+    assert_eq!(extra.outcome.unwrap_err().code, "INVALID_ARGUMENTS");
+}

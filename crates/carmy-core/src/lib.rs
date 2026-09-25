@@ -119,6 +119,11 @@ impl std::fmt::Display for AgentError {
 }
 impl std::error::Error for AgentError {}
 
+/// Input of tools that take no arguments: accepts only `{}`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NoInput {}
+
 /// Trusted framework context, constructed by the host, never from untrusted arguments.
 #[derive(Debug, Clone, Default)]
 pub struct AgentContext {

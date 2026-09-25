@@ -33,6 +33,17 @@ pub use carmy_macros::tool;
 pub use carmy_schema::schema;
 use std::{sync::Arc, time::Duration};
 pub use {schemars, serde, serde_json};
+mod state;
+pub mod testing;
+pub use state::{IntoTool, State, StateMap};
+
+#[doc(hidden)]
+pub mod __private {
+    pub use linkme;
+    /// Registrations emitted by `#[carmy::tool]`, collected at link time.
+    #[linkme::distributed_slice]
+    pub static TOOLS: [fn(crate::Carmy) -> crate::Carmy];
+}
 
 /// Execution engine, policies and idempotency stores.
 pub mod runtime {
@@ -56,7 +67,8 @@ pub mod observability {
 
 pub mod prelude {
     pub use crate::{
-        AgentContext, AgentError, AgentResult, Carmy, Confirmation, Effect, ErrorCategory, Tool,
+        AgentContext, AgentError, AgentResult, Carmy, Confirmation, Effect, ErrorCategory, State,
+        Tool,
     };
     pub use schemars::JsonSchema;
     pub use serde::{Deserialize, Serialize};
@@ -98,8 +110,11 @@ impl From<std::io::Error> for Error {
 pub struct Carmy {
     runtime: carmy_runtime::Runtime,
     name: String,
-    error: Option<AgentError>,
+    states: StateMap,
+    /// Registration waits for `build`, so `.state(..)` may follow `.tool(..)`.
+    tools: Vec<Registration>,
 }
+type Registration = Box<dyn FnOnce(&mut carmy_runtime::Runtime, &StateMap) -> AgentResult<()>>;
 impl Default for Carmy {
     fn default() -> Self {
         Self::new()
@@ -110,7 +125,8 @@ impl Carmy {
         Self {
             runtime: carmy_runtime::Runtime::new(),
             name: "carmy".into(),
-            error: None,
+            states: StateMap::default(),
+            tools: Vec::new(),
         }
     }
     /// Server name advertised by discovery documents.
@@ -118,10 +134,15 @@ impl Carmy {
         self.name = name.into();
         self
     }
-    pub fn tool<T: Tool>(mut self, tool: T) -> Self {
-        if let Err(e) = self.runtime.register(tool) {
-            self.error.get_or_insert(e);
-        }
+    pub fn tool<T: IntoTool + 'static>(mut self, tool: T) -> Self {
+        self.tools.push(Box::new(move |runtime, states| {
+            runtime.register(tool.into_tool(states)?)
+        }));
+        self
+    }
+    /// Register an application dependency for tools taking `State<T>`.
+    pub fn state<T: Clone + Send + Sync + 'static>(mut self, value: T) -> Self {
+        self.states.insert(value);
         self
     }
     /// Add a host policy; the default policy (confirmation for destructive tools) stays.
@@ -138,11 +159,11 @@ impl Carmy {
         self
     }
     /// The shared runtime, for embedding or for serving several transports.
-    pub fn build(self) -> Result<Arc<carmy_runtime::Runtime>, Error> {
-        match self.error {
-            Some(e) => Err(Error::Registration(e)),
-            None => Ok(Arc::new(self.runtime)),
+    pub fn build(mut self) -> Result<Arc<carmy_runtime::Runtime>, Error> {
+        for register in self.tools {
+            register(&mut self.runtime, &self.states).map_err(Error::Registration)?;
         }
+        Ok(Arc::new(self.runtime))
     }
     #[cfg(feature = "http")]
     pub fn router(self) -> Result<axum::Router, Error> {
