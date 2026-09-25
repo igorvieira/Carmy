@@ -1,0 +1,59 @@
+---
+title: Carmy
+description: "Composable Agent Runtime for Managed Yield. Deterministic, safe execution infrastructure for AI agents, in Rust."
+template: splash
+hero:
+  title: LLM reasoning can be probabilistic. Side effects should not be.
+  tagline: Carmy is the execution layer between AI agents and real systems. Its tools are typed Rust functions with explicit effects, machine-readable errors, safe retries and real cancellation, served over HTTP and MCP from the same code.
+  image:
+    html: |
+      <img class="dark:sl-hidden" src="/brand/lockup.png" width="960" height="720" alt="A chef placing a red cube on a straight rail, above the word CARMY" />
+      <img class="light:sl-hidden" src="/brand/lockup-dark.jpg" width="960" height="720" alt="A chef placing a red cube on a straight rail, above the word CARMY" />
+  actions:
+    - text: Get started
+      link: /getting-started/quick-start/
+      icon: right-arrow
+    - text: Why Carmy
+      link: /getting-started/introduction/
+      variant: secondary
+    - text: GitHub
+      link: https://github.com/igorvieira/Carmy
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+```console
+$ cargo install --git https://github.com/igorvieira/Carmy carmy-cli
+$ carmy new shop && cd shop
+$ cargo run           # HTTP
+$ cargo run -- mcp    # the same tools over MCP
+```
+
+<CardGrid>
+  <Card title="Typed tools" icon="puzzle">
+    An `async fn` with `#[carmy::tool]` becomes a tool. JSON Schemas for its input and
+    output are derived from your types, so agents discover it without reading docs.
+  </Card>
+  <Card title="Explicit effects" icon="warning">
+    Every tool declares `none`, `read`, `write`, `external_write` or `destructive`.
+    Destructive tools require a trusted confirmation before they run.
+  </Card>
+  <Card title="Safe retries" icon="random">
+    Agents retry after timeouts. A repeated `request_id` replays the recorded result.
+    The side effect never runs twice.
+  </Card>
+  <Card title="Errors for machines" icon="document">
+    Errors carry a stable code, a category, `recoverable`, `retryable`, `retry_after` and a
+    `suggested_action`, not just "Something went wrong".
+  </Card>
+  <Card title="Streaming and cancellation" icon="rocket">
+    A runtime event stream (served as SSE over HTTP), execution deadlines, and
+    cancellation propagated from client disconnects and MCP.
+  </Card>
+  <Card title="One runtime, many transports" icon="setting">
+    HTTP and MCP are thin adapters over the same runtime and the same tool code. The core
+    knows nothing about either.
+  </Card>
+</CardGrid>
