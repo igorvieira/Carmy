@@ -1,0 +1,10 @@
+[package]
+name = "carmy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Agent-native execution infrastructure: facade"
+
+
+[dependencies]
