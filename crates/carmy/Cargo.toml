@@ -10,7 +10,7 @@ keywords = ["agents", "llm", "tools", "mcp", "idempotency"]
 categories = ["asynchronous", "web-programming"]
 
 [features]
-default = ["http"]
+default = ["http", "mcp", "observability"]
 http = ["dep:carmy-http", "dep:axum"]
 mcp = ["dep:carmy-mcp"]
 observability = ["dep:carmy-observability"]
@@ -29,6 +29,7 @@ serde_json.workspace = true
 schemars.workspace = true
 tokio.workspace = true
 linkme = "0.3"
+toml = { version = "1", default-features = false, features = ["parse", "serde"] }
 
 [dev-dependencies]
 trybuild = "1"

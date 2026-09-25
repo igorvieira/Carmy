@@ -131,3 +131,19 @@ async fn tools_without_input_accept_empty_arguments() {
         .await;
     assert_eq!(extra.outcome.unwrap_err().code, "INVALID_ARGUMENTS");
 }
+#[carmy::tool(effect = "none", register = false)]
+async fn hidden() -> AgentResult<()> {
+    Ok(())
+}
+#[test]
+fn app_collects_declared_tools() {
+    let runtime = carmy::app().state(Greeting("Hi")).build().unwrap();
+    let names: Vec<_> = runtime.tools().into_iter().map(|t| t.name).collect();
+    assert_eq!(names, ["delete_customer", "greet", "ping", "search"]);
+    let _ = hidden;
+    // Declared tools still need their state when collected automatically.
+    assert!(matches!(
+        carmy::app().build(),
+        Err(carmy::Error::Registration(e)) if e.code == "MISSING_STATE"
+    ));
+}
