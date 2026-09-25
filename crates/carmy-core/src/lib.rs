@@ -60,7 +60,7 @@ pub struct AgentError {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suggested_action: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub details: Option<Value>,
+    pub details: Option<Box<Value>>,
 }
 impl AgentError {
     pub fn new(
