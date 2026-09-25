@@ -1,17 +1,30 @@
-//! HTTP DTOs and routes over Carmy's transport-independent runtime.
+//! HTTP adapter over Carmy's transport-independent runtime.
+//!
+//! Routes: `GET /.well-known/agent`, `GET /agent/tools`, `POST /agent/execute`
+//! (JSON, or Server-Sent Events with `Accept: text/event-stream`).
+//! Wire DTOs live here; runtime types never serialize directly onto the wire.
 use axum::{
     Extension, Json, Router,
     extract::{DefaultBodyLimit, State, rejection::JsonRejection},
     http::{HeaderMap, StatusCode, header},
-    response::{IntoResponse, Response},
+    response::{
+        IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
+    },
     routing::{get, post},
 };
 use carmy_core::*;
 use carmy_runtime::{Runtime, execution_request};
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::sync::Arc;
+use std::{convert::Infallible, sync::Arc};
+
+pub const DISCOVERY_PATH: &str = "/.well-known/agent";
+pub const TOOLS_PATH: &str = "/agent/tools";
+pub const EXECUTE_PATH: &str = "/agent/execute";
+const BODY_LIMIT: usize = 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -19,6 +32,7 @@ pub struct ExecuteDto {
     pub tool: String,
     #[serde(default = "empty_object")]
     pub arguments: Value,
+    /// Stable identity for retries; repeated requests replay the first result.
     pub request_id: Option<String>,
 }
 fn empty_object() -> Value {
@@ -33,21 +47,17 @@ pub struct ResultDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<AgentError>,
     #[serde(rename = "_agent")]
-    pub agent: Value,
+    pub agent: AgentHints,
+}
+#[derive(Debug, Default, Serialize)]
+pub struct AgentHints {
+    /// The client may reuse this result for identical arguments.
+    pub cacheable: bool,
+    pub next_actions: Vec<String>,
 }
 impl ResultDto {
-    /// Successful results of side-effect-free, idempotent tools may be reused by clients.
-    pub fn new(result: ExecutionResult, tool: Option<&ToolMetadata>) -> Self {
-        let cacheable = result.outcome.is_ok()
-            && tool
-                .is_some_and(|t| t.idempotent && matches!(t.effect, Effect::None | Effect::Read));
-        let mut dto = Self::from(result);
-        dto.agent = json!({"cacheable":cacheable,"next_actions":[]});
-        dto
-    }
-}
-impl From<ExecutionResult> for ResultDto {
-    fn from(result: ExecutionResult) -> Self {
+    /// `reusable` states whether the tool is idempotent and free of writes.
+    pub fn new(result: ExecutionResult, reusable: bool) -> Self {
         let status = match result.status {
             ExecutionStatus::Completed => "completed",
             ExecutionStatus::Failed => "failed",
@@ -61,46 +71,80 @@ impl From<ExecutionResult> for ResultDto {
         Self {
             execution_id: result.execution_id,
             status,
+            agent: AgentHints {
+                cacheable: reusable && data.is_some(),
+                next_actions: Vec::new(),
+            },
             data,
             error,
-            agent: json!({"cacheable":false,"next_actions":[]}),
         }
     }
 }
+fn reusable(tool: Option<&ToolMetadata>) -> bool {
+    tool.is_some_and(|t| t.idempotent && matches!(t.effect, Effect::None | Effect::Read))
+}
+#[derive(Serialize)]
+struct ToolDto<'a> {
+    name: &'a str,
+    description: &'a str,
+    input_schema: &'a Value,
+    output_schema: &'a Value,
+    effect: Effect,
+    idempotent: bool,
+    parallel_safe: bool,
+    confirmation: Confirmation,
+}
+impl<'a> From<&'a ToolMetadata> for ToolDto<'a> {
+    fn from(m: &'a ToolMetadata) -> Self {
+        Self {
+            name: &m.name,
+            description: &m.description,
+            input_schema: &m.input_schema,
+            output_schema: &m.output_schema,
+            effect: m.effect,
+            idempotent: m.idempotent,
+            parallel_safe: m.parallel_safe,
+            confirmation: m.confirmation,
+        }
+    }
+}
+/// Pre-serialized, content-addressed discovery document served with ETag revalidation.
 #[derive(Clone)]
 struct Document {
-    body: String,
-    etag: String,
+    body: Arc<str>,
+    etag: Arc<str>,
 }
 impl Document {
     fn new(value: Value) -> Self {
         let body = value.to_string();
         let etag = format!("\"{:x}\"", Sha256::digest(body.as_bytes()));
-        Self { body, etag }
+        Self {
+            body: body.into(),
+            etag: etag.into(),
+        }
     }
     fn response(&self, headers: &HeaderMap) -> Response {
         let matches = headers
             .get(header::IF_NONE_MATCH)
             .and_then(|v| v.to_str().ok())
             .is_some_and(|s| {
-                s.split(',')
-                    .any(|v| v.trim().trim_start_matches("W/") == self.etag || v.trim() == "*")
+                s.split(',').any(|v| {
+                    let v = v.trim();
+                    v == "*" || v.trim_start_matches("W/") == &*self.etag
+                })
             });
         let mut response = if matches {
             StatusCode::NOT_MODIFIED.into_response()
         } else {
-            self.body.clone().into_response()
+            self.body.to_string().into_response()
         };
-        response
-            .headers_mut()
-            .insert(header::ETAG, self.etag.parse().unwrap());
-        response.headers_mut().insert(
+        let headers = response.headers_mut();
+        headers.insert(header::ETAG, self.etag.parse().unwrap());
+        headers.insert(
             header::CACHE_CONTROL,
             "private, max-age=60".parse().unwrap(),
         );
-        response
-            .headers_mut()
-            .insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+        headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
         response
     }
 }
@@ -110,28 +154,35 @@ struct HttpState {
     discovery: Document,
     tools: Document,
 }
-/// Host middleware may insert `Extension<AgentContext>` after authentication.
-/// Apply authentication to the entire router if tool names/schemas are private.
+/// Build the agent router. Host middleware may insert `Extension<AgentContext>` after
+/// authentication; request bodies can never set context. Apply authentication to the
+/// entire router if tool names and schemas are private.
 pub fn router(runtime: Arc<Runtime>, server: impl Into<String>) -> Router {
-    let tools: Vec<_> = runtime.tools().into_iter().map(|m| json!({
-        "name":m.name,"description":m.description,"input_schema":m.input_schema,"output_schema":m.output_schema,
-        "effect":m.effect,"idempotent":m.idempotent,"parallel_safe":m.parallel_safe,"confirmation":m.confirmation
-    })).collect();
+    let metadata = runtime.tools();
+    let tools: Vec<ToolDto> = metadata.iter().map(ToolDto::from).collect();
+    let tools = Document::new(json!({ "tools": tools }));
+    // `tools_version` lets agents skip refetching an unchanged catalog.
+    let discovery = Document::new(json!({
+        "protocol": "carmy/1",
+        "server": server.into(),
+        "capabilities": ["tools", "streaming", "idempotency"],
+        "tools_url": TOOLS_PATH,
+        "tools_version": tools.etag.trim_matches('"'),
+        "execute_url": EXECUTE_PATH,
+    }));
     let state = HttpState {
         runtime,
-        discovery: Document::new(
-            json!({"protocol":"carmy/1","server":server.into(),"capabilities":["tools","idempotency"],"tools_url":"/agent/tools","execute_url":"/agent/execute"}),
-        ),
-        tools: Document::new(json!({"tools":tools})),
+        discovery,
+        tools,
     };
     Router::new()
-        .route("/.well-known/agent", get(discovery))
-        .route("/agent/tools", get(list_tools))
-        .route("/agent/execute", post(execute))
-        .layer(DefaultBodyLimit::max(1024 * 1024))
+        .route(DISCOVERY_PATH, get(discovery_document))
+        .route(TOOLS_PATH, get(list_tools))
+        .route(EXECUTE_PATH, post(execute))
+        .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .with_state(state)
 }
-async fn discovery(State(state): State<HttpState>, headers: HeaderMap) -> Response {
+async fn discovery_document(State(state): State<HttpState>, headers: HeaderMap) -> Response {
     state.discovery.response(&headers)
 }
 async fn list_tools(State(state): State<HttpState>, headers: HeaderMap) -> Response {
@@ -183,22 +234,66 @@ fn status_of(error: Option<&AgentError>) -> StatusCode {
         ErrorCategory::Internal => StatusCode::INTERNAL_SERVER_ERROR,
     })
 }
-/// Dropping this handler (client disconnect) cancels the execution's token; the
-/// runtime keeps the idempotency reservation so a retry reports uncertainty.
+fn wants_stream(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.contains("text/event-stream"))
+}
+/// Dropping this handler or its event stream (client disconnect) cancels the execution's
+/// token; the runtime keeps the idempotency reservation so a retry reports uncertainty.
 async fn execute(
     State(state): State<HttpState>,
     context: Option<Extension<AgentContext>>,
+    headers: HeaderMap,
     payload: Result<Json<ExecuteDto>, JsonRejection>,
 ) -> Response {
     let request = match decode(payload, context) {
         Ok(r) => r,
         Err(response) => return *response,
     };
-    let tool = request.tool.clone();
-    let result = state.runtime.execute(request).await;
-    let dto = ResultDto::new(result, state.runtime.metadata(&tool));
+    let reusable = reusable(state.runtime.metadata(&request.tool));
+    if wants_stream(&headers) {
+        let events = state
+            .runtime
+            .execute_stream(request)
+            .map(move |event| Ok::<_, Infallible>(sse_event(event, reusable)));
+        return Sse::new(events)
+            .keep_alive(KeepAlive::default())
+            .into_response();
+    }
+    let dto = ResultDto::new(state.runtime.execute(request).await, reusable);
     let status = status_of(dto.error.as_ref());
     (status, [(header::CACHE_CONTROL, "no-store")], Json(dto)).into_response()
+}
+/// SSE is only the wire encoding of runtime events. `execution.completed` carries the
+/// same `ResultDto` a JSON response would, plus `replayed`.
+fn sse_event(event: ExecutionEvent, reusable: bool) -> Event {
+    let name = event.name();
+    let data = match event {
+        ExecutionEvent::ExecutionStarted { execution_id, tool }
+        | ExecutionEvent::ToolStarted { execution_id, tool } => {
+            json!({ "execution_id": execution_id, "tool": tool })
+        }
+        ExecutionEvent::ToolCompleted {
+            execution_id,
+            tool,
+            duration_ms,
+            ok,
+        } => json!({
+            "execution_id": execution_id,
+            "tool": tool,
+            "duration_ms": duration_ms,
+            "ok": ok,
+        }),
+        ExecutionEvent::ExecutionCompleted { result, replayed } => {
+            let mut data =
+                serde_json::to_value(ResultDto::new(result, reusable)).expect("DTO serializes");
+            data["replayed"] = replayed.into();
+            data
+        }
+    };
+    Event::default().event(name).data(data.to_string())
 }
 pub async fn serve(
     runtime: Arc<Runtime>,

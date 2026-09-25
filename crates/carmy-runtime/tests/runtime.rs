@@ -190,3 +190,63 @@ async fn dropping_execution_cancels_and_retains_reservation() {
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
+fn names(events: &[ExecutionEvent]) -> Vec<&'static str> {
+    events.iter().map(ExecutionEvent::name).collect()
+}
+#[tokio::test]
+async fn event_stream_reports_lifecycle_and_replays() {
+    use futures_util::StreamExt;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let rt = Arc::new(
+        Runtime::new()
+            .tool(Write {
+                calls: calls.clone(),
+                delay: Duration::ZERO,
+            })
+            .unwrap(),
+    );
+    let mut req = request(json!("write"));
+    req.request_id = Some("abc".into());
+    let first: Vec<_> = rt.execute_stream(req.clone()).collect().await;
+    assert_eq!(
+        names(&first),
+        [
+            "execution.started",
+            "tool.started",
+            "tool.completed",
+            "execution.completed"
+        ]
+    );
+    let ExecutionEvent::ExecutionCompleted { result, replayed } = first.last().unwrap() else {
+        panic!("last event must complete the execution")
+    };
+    assert!(!replayed);
+    assert_eq!(result.status, ExecutionStatus::Completed);
+    req.context = AgentContext::default();
+    let replay: Vec<_> = rt.execute_stream(req).collect().await;
+    assert_eq!(names(&replay), ["execution.started", "execution.completed"]);
+    assert!(matches!(
+        replay.last(),
+        Some(ExecutionEvent::ExecutionCompleted { replayed: true, .. })
+    ));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+#[tokio::test]
+async fn dropping_event_stream_cancels_execution() {
+    use futures_util::StreamExt;
+    let rt = Arc::new(
+        Runtime::new()
+            .tool(Write {
+                calls: Arc::default(),
+                delay: Duration::from_secs(10),
+            })
+            .unwrap(),
+    );
+    let req = request(json!("write"));
+    let token = req.context.cancellation.clone();
+    let mut stream = rt.execute_stream(req);
+    assert_eq!(stream.next().await.unwrap().name(), "execution.started");
+    assert_eq!(stream.next().await.unwrap().name(), "tool.started");
+    drop(stream);
+    assert!(token.is_cancelled());
+}

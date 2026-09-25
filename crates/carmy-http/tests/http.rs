@@ -173,3 +173,89 @@ async fn timeouts_limits_and_cacheability() {
         "PAYLOAD_TOO_LARGE"
     );
 }
+fn stream(value: Value) -> Request<Body> {
+    Request::post("/agent/execute")
+        .header("content-type", "application/json")
+        .header("accept", "text/event-stream")
+        .body(Body::from(value.to_string()))
+        .unwrap()
+}
+#[tokio::test]
+async fn sse_streams_runtime_events() {
+    let response = app()
+        .oneshot(stream(
+            json!({"tool":"count","arguments":"x","request_id":"s"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["content-type"], "text/event-stream");
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body = std::str::from_utf8(&body).unwrap();
+    let events: Vec<_> = body
+        .lines()
+        .filter_map(|l| l.strip_prefix("event: "))
+        .collect();
+    assert_eq!(
+        events,
+        [
+            "execution.started",
+            "tool.started",
+            "tool.completed",
+            "execution.completed"
+        ]
+    );
+    let last: Value = serde_json::from_str(
+        body.lines()
+            .filter_map(|l| l.strip_prefix("data: "))
+            .next_back()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(last["status"], "completed");
+    assert_eq!(last["data"], 0);
+    assert_eq!(last["replayed"], false);
+}
+struct Watch(Arc<tokio::sync::Notify>);
+impl Tool for Watch {
+    type Input = String;
+    type Output = String;
+    fn metadata(&self) -> ToolMetadata {
+        let mut m = Slow.metadata();
+        m.name = "watch".into();
+        m
+    }
+    async fn execute(&self, ctx: AgentContext, input: String) -> AgentResult<String> {
+        // Background work observes the execution's cancellation token.
+        let notify = self.0.clone();
+        tokio::spawn(async move {
+            ctx.cancellation.cancelled().await;
+            notify.notify_one();
+        });
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        Ok(input)
+    }
+}
+#[tokio::test]
+async fn client_disconnect_cancels_streamed_execution() {
+    let cancelled = Arc::new(tokio::sync::Notify::new());
+    let app = carmy_http::router(
+        Arc::new(Runtime::new().tool(Watch(cancelled.clone())).unwrap()),
+        "test",
+    );
+    let response = app
+        .oneshot(stream(json!({"tool":"watch","arguments":"x"})))
+        .await
+        .unwrap();
+    let mut body = response.into_body();
+    // Read until the tool has started, then disconnect.
+    let mut seen = String::new();
+    while !seen.contains("tool.started") {
+        let frame = body.frame().await.unwrap().unwrap();
+        seen.push_str(std::str::from_utf8(frame.data_ref().unwrap()).unwrap());
+    }
+    drop(body);
+    tokio::time::timeout(std::time::Duration::from_secs(1), cancelled.notified())
+        .await
+        .expect("disconnect must cancel the execution token");
+}

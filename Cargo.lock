@@ -180,6 +180,7 @@ dependencies = [
  "axum",
  "carmy-core",
  "carmy-runtime",
+ "futures-util",
  "http-body-util",
  "schemars",
  "serde",

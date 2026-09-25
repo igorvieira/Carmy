@@ -132,12 +132,41 @@ pub struct ExecutionResult {
     pub status: ExecutionStatus,
     pub outcome: AgentResult<Value>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExecutionEvent {
-    pub execution_id: String,
-    pub kind: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub result: Option<ExecutionResult>,
+/// Lifecycle events emitted by the runtime, independent of any wire encoding.
+/// `ToolStarted`/`ToolCompleted` are absent when a result is replayed or the
+/// request is rejected before invocation. `ExecutionCompleted` is always last.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ExecutionEvent {
+    ExecutionStarted {
+        execution_id: String,
+        tool: String,
+    },
+    ToolStarted {
+        execution_id: String,
+        tool: String,
+    },
+    ToolCompleted {
+        execution_id: String,
+        tool: String,
+        duration_ms: u64,
+        ok: bool,
+    },
+    ExecutionCompleted {
+        result: ExecutionResult,
+        replayed: bool,
+    },
+}
+impl ExecutionEvent {
+    /// Stable dotted name, e.g. `execution.started`.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::ExecutionStarted { .. } => "execution.started",
+            Self::ToolStarted { .. } => "tool.started",
+            Self::ToolCompleted { .. } => "tool.completed",
+            Self::ExecutionCompleted { .. } => "execution.completed",
+        }
+    }
 }
 #[cfg(test)]
 mod tests {

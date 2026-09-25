@@ -1,13 +1,17 @@
 //! Transport-independent execution and policy enforcement.
 pub mod idempotency;
 use carmy_core::*;
-use futures_util::FutureExt;
+use futures_util::{FutureExt, Stream};
 pub use idempotency::*;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc};
-use std::{panic::AssertUnwindSafe, time::Duration};
-use tokio::sync::Mutex;
+use std::{
+    panic::AssertUnwindSafe,
+    task::{Context, Poll},
+    time::{Duration, Instant},
+};
+use tokio::sync::{Mutex, mpsc};
 
 type ToolFuture<'a> = Pin<Box<dyn Future<Output = AgentResult<Value>> + Send + 'a>>;
 trait ErasedTool: Send + Sync {
@@ -165,20 +169,57 @@ impl Runtime {
         self.store = store;
         self
     }
-    pub async fn execute(&self, mut request: ExecutionRequest) -> ExecutionResult {
+    pub async fn execute(&self, request: ExecutionRequest) -> ExecutionResult {
+        self.execute_with(request, None).await
+    }
+    /// Execute while yielding lifecycle events. The stream drives the execution itself:
+    /// dropping it before `ExecutionCompleted` cancels the execution exactly like
+    /// dropping the `execute` future does.
+    pub fn execute_stream(self: &Arc<Self>, request: ExecutionRequest) -> ExecutionStream {
+        let (sender, events) = mpsc::unbounded_channel();
+        let runtime = self.clone();
+        ExecutionStream {
+            work: Some(Box::pin(async move {
+                runtime.execute_with(request, Some(sender)).await;
+            })),
+            events,
+        }
+    }
+    async fn execute_with(
+        &self,
+        mut request: ExecutionRequest,
+        events: Option<Sender>,
+    ) -> ExecutionResult {
         request.context.execution_id = request.execution_id.clone();
         request.context.request_id = request.request_id.clone();
         let cancellation = request.context.cancellation.clone();
         let cancel_on_drop = cancellation.clone().drop_guard();
         let id = request.execution_id.clone();
-        let response = match self.run(request).await {
-            Ok(result) => result,
-            Err(e) => result(id, Err(e)),
+        let emit = |event| {
+            if let Some(sender) = &events {
+                let _ = sender.send(event);
+            }
         };
+        emit(ExecutionEvent::ExecutionStarted {
+            execution_id: id.clone(),
+            tool: request.tool.clone(),
+        });
+        let (response, replayed) = match self.run(request, &emit).await {
+            Ok(done) => done,
+            Err(e) => (result(id, Err(e)), false),
+        };
+        emit(ExecutionEvent::ExecutionCompleted {
+            result: response.clone(),
+            replayed,
+        });
         cancel_on_drop.disarm();
         response
     }
-    async fn run(&self, request: ExecutionRequest) -> AgentResult<ExecutionResult> {
+    async fn run(
+        &self,
+        request: ExecutionRequest,
+        emit: &(dyn Fn(ExecutionEvent) + Send + Sync),
+    ) -> AgentResult<(ExecutionResult, bool)> {
         let registered = self
             .tools
             .get(&request.tool)
@@ -235,7 +276,7 @@ impl Runtime {
         if let Some(key) = &key {
             match self.store.reserve(key, &fingerprint).await? {
                 Reservation::Acquired => {}
-                Reservation::Replay(result) => return Ok(result),
+                Reservation::Replay(result) => return Ok((result, true)),
                 Reservation::Conflict => {
                     return Err(error(
                         "IDEMPOTENCY_CONFLICT",
@@ -253,6 +294,12 @@ impl Runtime {
             }
         }
         let cancellation = request.context.cancellation.clone();
+        let (execution_id, tool) = (request.execution_id, request.tool);
+        emit(ExecutionEvent::ToolStarted {
+            execution_id: execution_id.clone(),
+            tool: tool.clone(),
+        });
+        let started = Instant::now();
         let work = async {
             let _guard = if !registered.metadata.parallel_safe {
                 Some(registered.serial.lock().await)
@@ -278,11 +325,34 @@ impl Runtime {
             _ = tokio::time::sleep(self.timeout) => { cancellation.cancel(); Err(error("TIMEOUT", "Execution timed out; external effects may have committed", ErrorCategory::Timeout)) },
             result = AssertUnwindSafe(work).catch_unwind() => result.unwrap_or_else(|_| Err(error("TOOL_PANIC", "Tool panicked; external effects may have committed", ErrorCategory::Internal))),
         };
-        let result = result(request.execution_id, outcome);
+        emit(ExecutionEvent::ToolCompleted {
+            execution_id: execution_id.clone(),
+            tool,
+            duration_ms: started.elapsed().as_millis() as u64,
+            ok: outcome.is_ok(),
+        });
+        let result = result(execution_id, outcome);
         if let Some(key) = &key {
             self.store.complete(key, &fingerprint, &result).await?;
         }
-        Ok(result)
+        Ok((result, false))
+    }
+}
+type Sender = mpsc::UnboundedSender<ExecutionEvent>;
+/// Stream of [`ExecutionEvent`]s ending with `ExecutionCompleted`.
+pub struct ExecutionStream {
+    work: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
+    events: mpsc::UnboundedReceiver<ExecutionEvent>,
+}
+impl Stream for ExecutionStream {
+    type Item = ExecutionEvent;
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<ExecutionEvent>> {
+        if let Some(work) = self.work.as_mut()
+            && work.as_mut().poll(cx).is_ready()
+        {
+            self.work = None;
+        }
+        self.events.poll_recv(cx)
     }
 }
 /// Create a request with a fresh execution ID; callers supply a stable request ID for retries.
