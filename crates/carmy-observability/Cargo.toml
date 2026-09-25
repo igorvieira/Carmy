@@ -4,7 +4,16 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Agent-native execution infrastructure: observability"
+description = "Agent-native execution infrastructure: tracing setup"
 
 
 [dependencies]
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+carmy-core = { path = "../carmy-core" }
+carmy-runtime = { path = "../carmy-runtime" }
+schemars.workspace = true
+serde_json.workspace = true
+tokio.workspace = true

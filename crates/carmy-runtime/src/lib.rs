@@ -12,6 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::{Mutex, mpsc};
+use tracing::{Instrument, field};
 
 type ToolFuture<'a> = Pin<Box<dyn Future<Output = AgentResult<Value>> + Send + 'a>>;
 trait ErasedTool: Send + Sync {
@@ -200,14 +201,37 @@ impl Runtime {
                 let _ = sender.send(event);
             }
         };
+        // Arguments and outputs are never recorded: they may carry secrets.
+        let span = tracing::info_span!(
+            "carmy.execution",
+            execution_id = %id,
+            request_id = request.request_id.as_deref(),
+            tool = %request.tool,
+            effect = self.metadata(&request.tool).map(|m| m.effect.as_str()),
+            status = field::Empty,
+            duration_ms = field::Empty,
+            replayed = field::Empty,
+            error_code = field::Empty,
+        );
+        let started = Instant::now();
         emit(ExecutionEvent::ExecutionStarted {
             execution_id: id.clone(),
             tool: request.tool.clone(),
         });
-        let (response, replayed) = match self.run(request, &emit).await {
+        let (response, replayed) = match self.run(request, &emit).instrument(span.clone()).await {
             Ok(done) => done,
             Err(e) => (result(id, Err(e)), false),
         };
+        span.record("status", response.status.as_str());
+        span.record("duration_ms", started.elapsed().as_millis() as u64);
+        span.record("replayed", replayed);
+        match &response.outcome {
+            Ok(_) => tracing::info!(parent: &span, "execution finished"),
+            Err(e) => {
+                span.record("error_code", e.code.as_str());
+                tracing::warn!(parent: &span, "execution failed");
+            }
+        }
         emit(ExecutionEvent::ExecutionCompleted {
             result: response.clone(),
             replayed,

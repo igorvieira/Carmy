@@ -19,6 +19,17 @@ pub enum Effect {
     ExternalWrite,
     Destructive,
 }
+impl Effect {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Read => "read",
+            Self::Write => "write",
+            Self::ExternalWrite => "external_write",
+            Self::Destructive => "destructive",
+        }
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Confirmation {
@@ -118,13 +129,23 @@ pub struct ExecutionRequest {
     pub context: AgentContext,
     pub metadata: BTreeMap<String, Value>,
 }
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionStatus {
     Completed,
     Failed,
     Cancelled,
     TimedOut,
+}
+impl ExecutionStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+            Self::TimedOut => "timed_out",
+        }
+    }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionResult {
@@ -178,10 +199,18 @@ mod tests {
         assert_eq!(v["code"], "DENIED");
         assert_eq!(v["retryable"], false);
         assert!(v.get("details").is_none());
-        assert_eq!(
-            serde_json::to_value(Effect::ExternalWrite).unwrap(),
-            "external_write"
-        );
+        for effect in [
+            Effect::None,
+            Effect::Read,
+            Effect::Write,
+            Effect::ExternalWrite,
+            Effect::Destructive,
+        ] {
+            assert_eq!(serde_json::to_value(effect).unwrap(), effect.as_str());
+        }
+        for status in [ExecutionStatus::Completed, ExecutionStatus::TimedOut] {
+            assert_eq!(serde_json::to_value(status).unwrap(), status.as_str());
+        }
     }
     #[test]
     fn cancellation_is_shared() {

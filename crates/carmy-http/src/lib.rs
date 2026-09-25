@@ -58,12 +58,7 @@ pub struct AgentHints {
 impl ResultDto {
     /// `reusable` states whether the tool is idempotent and free of writes.
     pub fn new(result: ExecutionResult, reusable: bool) -> Self {
-        let status = match result.status {
-            ExecutionStatus::Completed => "completed",
-            ExecutionStatus::Failed => "failed",
-            ExecutionStatus::Cancelled => "cancelled",
-            ExecutionStatus::TimedOut => "timed_out",
-        };
+        let status = result.status.as_str();
         let (data, error) = match result.outcome {
             Ok(data) => (Some(data), None),
             Err(e) => (None, Some(e)),
