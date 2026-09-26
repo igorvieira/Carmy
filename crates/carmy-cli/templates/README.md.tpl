@@ -6,6 +6,8 @@ A [Carmy](https://github.com/igorvieira/carmy) application.
 cargo run              # HTTP on 127.0.0.1:3000 (see carmy.toml)
 cargo run -- mcp       # MCP over stdio (Claude Desktop, Cursor, ...)
 cargo run -- tools     # print the tool catalog
+cargo run -- worker    # run jobs and schedules
+cargo run -- console   # call tools by hand, or let an agent do it
 carmy console          # explore and call the tools in a terminal UI
 cargo test
 ```

@@ -36,6 +36,7 @@ mod app;
 mod config;
 pub mod console;
 mod state;
+pub mod system;
 pub use app::{Carmy, DEFAULT_ADDRESS, Error, Result, app, run};
 pub use config::Config;
 pub mod testing;

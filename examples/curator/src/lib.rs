@@ -518,7 +518,9 @@ pub fn app_with(settings: Settings, store: Arc<Store>, publishers: Arc<Publisher
             }
         }),
     );
-    let app = Carmy::new()
+    // `carmy::app()` reads carmy.toml and the environment: with the `postgres` feature,
+    // DATABASE_URL moves jobs, idempotency and audit to Postgres, with no code here.
+    carmy::app()
         .name("curator")
         .state(Source(Arc::new(settings.offers.clone())))
         .state(store)
@@ -554,53 +556,5 @@ pub fn app_with(settings: Settings, store: Arc<Store>, publishers: Arc<Publisher
                 .enqueue(),
         )
         .routes(site)
-        .require_worker(Duration::from_secs(60));
-    with_database(app)
-}
-
-#[cfg(feature = "postgres")]
-fn with_database(app: Carmy) -> Carmy {
-    use carmy::postgres::{
-        PostgresAudit, PostgresIdempotencyStore, PostgresJobStore, Retention, cleanup, connect,
-        migrate,
-    };
-    let Ok(url) = std::env::var("DATABASE_URL") else {
-        return app;
-    };
-    let pool = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async {
-            let pool = connect(&url).await.expect("DATABASE_URL is reachable");
-            migrate(&pool).await.expect("migrations apply");
-            pool
-        })
-    });
-    let for_cleanup = pool.clone();
-    app.jobs(Arc::new(PostgresJobStore::new(pool.clone())))
-        .idempotency_store(Arc::new(PostgresIdempotencyStore::new(pool.clone())))
-        .sink(Arc::new(PostgresAudit::new(pool.clone())))
-        .ready("database", move || carmy::postgres::ready(pool.clone()))
-        // Migrations already ran above; the command exists for deploy scripts.
-        .command("migrate", |_| Box::pin(async { Ok(()) }))
-        // Run it from cron, a Kubernetes CronJob or any scheduler.
-        .command("cleanup", move |_| {
-            Box::pin(async move {
-                let cleaned = cleanup(&for_cleanup, Retention::default())
-                    .await
-                    .map_err(|e| carmy::Error::Io(std::io::Error::other(e.to_string())))?;
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "jobs": cleaned.jobs,
-                        "idempotency": cleaned.idempotency,
-                        "audit": cleaned.audit,
-                    })
-                );
-                Ok(())
-            })
-        })
-}
-
-#[cfg(not(feature = "postgres"))]
-fn with_database(app: Carmy) -> Carmy {
-    app
+        .require_worker(Duration::from_secs(60))
 }

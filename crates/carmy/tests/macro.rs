@@ -139,7 +139,10 @@ async fn hidden() -> AgentResult<()> {
 fn app_collects_declared_tools() {
     let runtime = carmy::app().state(Greeting("Hi")).build().unwrap();
     let names: Vec<_> = runtime.tools().into_iter().map(|t| t.name).collect();
-    assert_eq!(names, ["delete_customer", "greet", "ping", "search"]);
+    assert_eq!(
+        names,
+        ["carmy_job", "delete_customer", "greet", "ping", "search"]
+    );
     let _ = hidden;
     // Declared tools still need their state when collected automatically.
     assert!(matches!(

@@ -73,6 +73,15 @@ pub struct Carmy {
     routes: Vec<axum::Router>,
     worker_liveness: Option<Duration>,
     commands: std::collections::HashMap<String, Command>,
+    operator_tools: bool,
+    #[cfg(feature = "postgres")]
+    database: Option<Database>,
+}
+/// A configured Postgres database: its pool and how long `cleanup` keeps rows.
+#[cfg(feature = "postgres")]
+struct Database {
+    pool: carmy_postgres::sqlx::PgPool,
+    retention: carmy_postgres::Retention,
 }
 /// An app-defined command: receives the builder and runs to completion.
 pub type Command =
@@ -112,7 +121,68 @@ impl Carmy {
             routes: Vec::new(),
             worker_liveness: None,
             commands: std::collections::HashMap::new(),
+            operator_tools: false,
+            #[cfg(feature = "postgres")]
+            database: None,
         }
+    }
+    /// Add `carmy_dead_letters` and `carmy_audit`, read-only tools that show the
+    /// dead-letter queue and the latest executions to agents. They reveal who ran
+    /// what, so pair them with a policy such as `RequireToolPermission`.
+    /// (`carmy_job`, a job's status by id, is always present.)
+    pub fn operator_tools(mut self) -> Self {
+        self.operator_tools = true;
+        self
+    }
+    /// Keep jobs, idempotency records and the audit trail in Postgres at `url`
+    /// (`[database] url` in `carmy.toml`, or `DATABASE_URL`). The pool connects on
+    /// first use; `run()` migrates Carmy's tables before any command but `tools`.
+    /// Tools may take `State<PgPool>`, and `State<PostgresJobStore>` for the outbox.
+    /// Adds the `database` readiness check and the `migrate` and `cleanup` commands.
+    #[cfg(feature = "postgres")]
+    pub fn database(mut self, url: &str) -> Self {
+        let pool = match carmy_postgres::connect_lazy(url) {
+            Ok(pool) => pool,
+            Err(e) => {
+                self.error = Some(Error::Config(format!("database url: {e}")));
+                return self;
+            }
+        };
+        let store = carmy_postgres::PostgresJobStore::new(pool.clone());
+        self.job_store = Arc::new(store.clone());
+        self.runtime = self
+            .runtime
+            .idempotency_store(Arc::new(carmy_postgres::PostgresIdempotencyStore::new(
+                pool.clone(),
+            )))
+            .sink(Arc::new(carmy_postgres::PostgresAudit::new(pool.clone())));
+        self.states.insert(pool.clone());
+        self.states.insert(store);
+        #[cfg(feature = "http")]
+        {
+            let check = pool.clone();
+            self = self.ready("database", move || carmy_postgres::ready(check.clone()));
+        }
+        let retention = self
+            .database
+            .take()
+            .map_or_else(carmy_postgres::Retention::default, |d| d.retention);
+        self.database = Some(Database { pool, retention });
+        self
+    }
+    /// How long the `cleanup` command keeps finished work; see
+    /// [`carmy_postgres::Retention`].
+    #[cfg(feature = "postgres")]
+    pub fn retention(mut self, retention: carmy_postgres::Retention) -> Self {
+        match &mut self.database {
+            Some(database) => database.retention = retention,
+            None => {
+                self.error.get_or_insert(Error::Config(
+                    "retention needs a database; call .database(url) first".into(),
+                ));
+            }
+        }
+        self
     }
     /// A dependency `GET /ready` verifies; see [`carmy_http::ReadyCheck`]. A closure
     /// returning a future works: `.ready("database", move || ready(pool.clone()))`.
@@ -139,15 +209,16 @@ impl Carmy {
         self
     }
     /// An extra command for [`Carmy::run`], e.g.
-    /// `.command("migrate", |app| Box::pin(async move { .. }))`. The closure receives
-    /// the builder, so it can build the runtime or read its state.
-    pub fn command(
-        mut self,
-        name: impl Into<String>,
-        run: impl FnOnce(Carmy) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result>>>
-        + 'static,
-    ) -> Self {
-        self.commands.insert(name.into(), Box::new(run));
+    /// `.command("seed", |app| async move { .. })`. The closure receives the builder,
+    /// so it can build the runtime or read its state. It replaces a built-in command
+    /// of the same name.
+    pub fn command<F, Fut>(mut self, name: impl Into<String>, run: F) -> Self
+    where
+        F: FnOnce(Carmy) -> Fut + 'static,
+        Fut: std::future::Future<Output = Result> + 'static,
+    {
+        self.commands
+            .insert(name.into(), Box::new(move |app| Box::pin(run(app))));
         self
     }
     /// Also send every [`carmy_runtime::ExecutionRecord`] here (a durable audit trail,
@@ -223,6 +294,32 @@ impl Carmy {
         if let Some(max_attempts) = config.jobs.max_attempts {
             self.retry.max_attempts = max_attempts.max(1);
         }
+        if let Some(url) = &config.database.url {
+            #[cfg(feature = "postgres")]
+            {
+                self = self.database(url);
+                let days = |d: u64| Duration::from_secs(d * 24 * 3600);
+                let db = &config.database;
+                if let Some(database) = &mut self.database {
+                    if let Some(d) = db.jobs_retention_days {
+                        database.retention.jobs = days(d);
+                    }
+                    if let Some(d) = db.idempotency_retention_days {
+                        database.retention.idempotency = days(d);
+                    }
+                    if let Some(d) = db.audit_retention_days {
+                        database.retention.audit = days(d);
+                    }
+                }
+            }
+            #[cfg(not(feature = "postgres"))]
+            {
+                let _ = url;
+                self.error = Some(Error::Config(
+                    "database.url needs carmy's `postgres` feature".into(),
+                ));
+            }
+        }
         #[cfg(feature = "http")]
         {
             let http = &config.http;
@@ -279,6 +376,20 @@ impl Carmy {
         let jobs = carmy_jobs::Jobs::unbound(self.job_store).with_retry(self.retry);
         self.states.insert(jobs.clone());
         self.runtime = self.runtime.sink(self.audit.clone());
+        // Registered first, so an app tool can never take their names silently.
+        let system = self
+            .runtime
+            .register(crate::system::JobStatus(jobs.clone()))
+            .and_then(|()| {
+                if self.operator_tools {
+                    self.runtime
+                        .register(crate::system::DeadLettersTool(jobs.clone()))?;
+                    self.runtime
+                        .register(crate::system::AuditTool(self.audit.clone()))?;
+                }
+                Ok(())
+            });
+        system.map_err(Error::Registration)?;
         for register in self.tools {
             register(&mut self.runtime, &self.states).map_err(Error::Registration)?;
         }
@@ -358,6 +469,9 @@ impl Carmy {
     /// | `mcp`              | serve MCP over stdin/stdout                       |
     /// | `console`          | serve the `carmy-console/1` protocol over stdio   |
     /// | `tools`            | print the tool catalog as JSON and exit           |
+    /// | `worker`           | run the jobs and the schedules                    |
+    /// | `migrate`          | create or update Carmy's tables (with a database) |
+    /// | `cleanup`          | delete rows past their retention (with a database) |
     /// | *(custom)*         | anything added with [`Carmy::command`]             |
     pub async fn run(self) -> Result {
         let command = std::env::args().nth(1);
@@ -371,8 +485,41 @@ impl Carmy {
             Some("console") => "warn",
             _ => "info",
         });
+        #[cfg(feature = "postgres")]
+        if command != Some("tools")
+            && let Some(database) = &self.database
+        {
+            carmy_postgres::migrate(&database.pool)
+                .await
+                .map_err(|e| Error::Io(std::io::Error::other(format!("database: {e}"))))?;
+        }
         if let Some(run) = command.and_then(|c| self.commands.remove(c)) {
             return run(self).await;
+        }
+        #[cfg(feature = "postgres")]
+        if let Some(database) = &self.database {
+            match command {
+                // Migrations already ran above.
+                Some("migrate") => {
+                    eprintln!("carmy: database is up to date");
+                    return Ok(());
+                }
+                Some("cleanup") => {
+                    let cleaned = carmy_postgres::cleanup(&database.pool, database.retention)
+                        .await
+                        .map_err(|e| Error::Io(std::io::Error::other(e.to_string())))?;
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "jobs": cleaned.jobs,
+                            "idempotency": cleaned.idempotency,
+                            "audit": cleaned.audit,
+                        })
+                    );
+                    return Ok(());
+                }
+                _ => {}
+            }
         }
         match command {
             None | Some("server") => self.run_http().await,
@@ -424,6 +571,10 @@ impl Carmy {
             }
             Some(other) => {
                 let mut known: Vec<&str> = vec!["server", "worker", "mcp", "console", "tools"];
+                #[cfg(feature = "postgres")]
+                if self.database.is_some() {
+                    known.extend(["migrate", "cleanup"]);
+                }
                 known.extend(self.commands.keys().map(String::as_str));
                 Err(Error::Usage(format!(
                     "unknown command `{other}`; expected one of: {}",

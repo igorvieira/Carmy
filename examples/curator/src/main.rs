@@ -5,7 +5,7 @@
 //! cargo run -p curator                  # HTTP: agent routes, /webhooks/billing, /deals, /ready
 //! cargo run -p curator -- worker        # runs the jobs and the schedules
 //! cargo run -p curator -- console       # try the tools; `audit`, `dead`
-//! DATABASE_URL=postgres://.. cargo run -p curator --features postgres -- migrate
+//! DATABASE_URL=postgres://.. cargo run -p curator --features postgres   # everything durable
 //! DATABASE_URL=postgres://.. cargo run -p curator --features postgres -- cleanup
 //! ```
 #[tokio::main]

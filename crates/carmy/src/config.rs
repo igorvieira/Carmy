@@ -21,6 +21,40 @@ pub struct Config {
     /// `[jobs]` table: the worker.
     #[serde(default)]
     pub jobs: JobsConfig,
+    /// `[database]` table: Postgres for jobs, idempotency and audit.
+    #[serde(default)]
+    pub database: DatabaseConfig,
+}
+
+/// ```toml
+/// [database]                      # needs carmy's `postgres` feature
+/// url = "postgres://localhost/shop"   # CARMY_DATABASE_URL, then DATABASE_URL
+/// jobs_retention_days = 30
+/// idempotency_retention_days = 7
+/// audit_retention_days = 90
+/// ```
+#[derive(Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DatabaseConfig {
+    pub url: Option<String>,
+    pub jobs_retention_days: Option<u64>,
+    pub idempotency_retention_days: Option<u64>,
+    pub audit_retention_days: Option<u64>,
+}
+
+/// The URL may hold a password: never print it.
+impl std::fmt::Debug for DatabaseConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DatabaseConfig")
+            .field("url", &self.url.as_ref().map(|_| "<redacted>"))
+            .field("jobs_retention_days", &self.jobs_retention_days)
+            .field(
+                "idempotency_retention_days",
+                &self.idempotency_retention_days,
+            )
+            .field("audit_retention_days", &self.audit_retention_days)
+            .finish()
+    }
 }
 
 /// ```toml
@@ -98,6 +132,10 @@ impl Config {
         if let Some(max) = env("CARMY_HTTP_MAX_CONNECTIONS") {
             config.http.max_connections = Some(number("CARMY_HTTP_MAX_CONNECTIONS", max)?);
         }
+        // The conventional `DATABASE_URL` works too; `CARMY_DATABASE_URL` wins.
+        if let Some(url) = env("CARMY_DATABASE_URL").or_else(|| env("DATABASE_URL")) {
+            config.database.url = Some(url);
+        }
         if let Some(n) = env("CARMY_JOBS_CONCURRENCY") {
             config.jobs.concurrency = Some(number("CARMY_JOBS_CONCURRENCY", n)?);
         }
@@ -159,6 +197,27 @@ mod tests {
         .unwrap();
         assert_eq!(config.jobs.concurrency, Some(8));
         assert_eq!(config.jobs.max_attempts, Some(3));
+    }
+    #[test]
+    fn database_url_from_file_or_environment() {
+        let file = "[database]\nurl = \"postgres://file/db\"\naudit_retention_days = 30";
+        let config = Config::from_sources(Some(file), |_| None).unwrap();
+        assert_eq!(config.database.url.as_deref(), Some("postgres://file/db"));
+        assert_eq!(config.database.audit_retention_days, Some(30));
+        let env = |key: &str| (key == "DATABASE_URL").then(|| "postgres://env/db".to_string());
+        let config = Config::from_sources(Some(file), env).unwrap();
+        assert_eq!(config.database.url.as_deref(), Some("postgres://env/db"));
+        let env = |key: &str| match key {
+            "DATABASE_URL" => Some("postgres://generic/db".to_string()),
+            "CARMY_DATABASE_URL" => Some("postgres://carmy/db".to_string()),
+            _ => None,
+        };
+        let config = Config::from_sources(None, env).unwrap();
+        assert_eq!(config.database.url.as_deref(), Some("postgres://carmy/db"));
+        assert!(
+            !format!("{config:?}").contains("postgres://"),
+            "the URL is redacted"
+        );
     }
     #[test]
     fn typos_and_bad_values_are_reported() {

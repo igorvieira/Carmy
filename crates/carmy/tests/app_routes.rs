@@ -89,16 +89,16 @@ async fn an_app_serves_its_own_routes_and_readiness_next_to_the_agent_routes() {
 async fn app_commands_run_with_the_built_app() {
     let ran = Arc::new(AtomicBool::new(false));
     let flag = ran.clone();
-    let app = Carmy::new().tool(hi).command("migrate", move |app| {
-        let flag = flag.clone();
-        Box::pin(async move {
+    // A plain async closure: no Box::pin.
+    let app = Carmy::new()
+        .tool(hi)
+        .command("seed", move |app| async move {
             let runtime = app.build()?;
-            assert_eq!(runtime.tools().len(), 1);
+            assert!(runtime.metadata("hi").is_some());
             flag.store(true, Ordering::SeqCst);
             Ok(())
-        })
-    });
-    app.run_command(Some("migrate")).await.unwrap();
+        });
+    app.run_command(Some("seed")).await.unwrap();
     assert!(ran.load(Ordering::SeqCst));
 
     let unknown = Carmy::new().tool(hi).run_command(Some("nope")).await;

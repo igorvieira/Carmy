@@ -56,9 +56,9 @@ async fn discovery_and_calls() {
     .await;
     assert_eq!(out[0]["event"], "ready");
     assert_eq!(out[0]["protocol"], "carmy-console/1");
-    assert_eq!(out[0]["tools"], 2);
+    assert_eq!(out[0]["tools"], 3, "two tools and carmy_job");
     assert_eq!(out[1]["id"], 1);
-    assert_eq!(out[1]["result"]["tools"].as_array().unwrap().len(), 2);
+    assert_eq!(out[1]["result"]["tools"].as_array().unwrap().len(), 3);
     assert_eq!(out[2]["result"]["effect"], "write");
     let call = &out[3]["result"];
     assert_eq!(out[3]["ok"], true);
@@ -123,7 +123,7 @@ async fn text_commands_answer_in_json() {
         "tools",
     ])
     .await;
-    assert_eq!(out[1]["result"]["tools"].as_array().unwrap().len(), 2);
+    assert_eq!(out[1]["result"]["tools"].as_array().unwrap().len(), 3);
     assert_eq!(out[2]["result"]["confirmation"], "required");
     assert_eq!(out[3]["result"]["data"]["sku"], "KB-01");
     assert_eq!(out[4]["error"]["code"], "INVALID_REQUEST");

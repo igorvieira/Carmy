@@ -20,7 +20,8 @@ async fn serves_mcp_over_pipes() {
     let transport = (child.stdout.take().unwrap(), child.stdin.take().unwrap());
     let client = ().serve(transport).await.unwrap();
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 3);
+    // The three app tools, plus carmy_job.
+    assert_eq!(tools.len(), 4);
     // Concurrent calls exercise interleaved reads and writes on the pipes.
     let calls = (0..64).map(|_| {
         client.call_tool(
@@ -73,6 +74,6 @@ async fn falls_back_when_stdin_is_a_file() {
         r["id"] == 2
             && r["result"]["tools"]
                 .as_array()
-                .is_some_and(|t| t.len() == 3)
+                .is_some_and(|t| t.len() == 4)
     }));
 }

@@ -35,6 +35,15 @@ pub async fn connect(url: &str) -> Result<PgPool, sqlx::Error> {
         .await
 }
 
+/// [`connect`] without connecting: the pool opens connections on first use, so it can
+/// be built synchronously, e.g. from configuration. Fails only on an invalid URL.
+pub fn connect_lazy(url: &str) -> Result<PgPool, sqlx::Error> {
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(8)
+        .acquire_timeout(Duration::from_secs(5))
+        .connect_lazy(url)
+}
+
 /// Carmy's schema, in order. Versions are tracked in `carmy_schema_version`, apart from
 /// `_sqlx_migrations`, so they never collide with the application's migrations.
 const MIGRATIONS: &[(i32, &str)] = &[
@@ -62,14 +71,21 @@ fn apply_migrations<'c>(
         sqlx::query("SELECT pg_advisory_xact_lock(hashtext('carmy_schema'))")
             .execute(&mut *conn)
             .await?;
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS carmy_schema_version ( \
-               version INTEGER PRIMARY KEY, \
-               applied_at TIMESTAMPTZ NOT NULL DEFAULT now() \
-             )",
-        )
-        .execute(&mut *conn)
-        .await?;
+        // Checked first: `CREATE ... IF NOT EXISTS` would log a notice on every start.
+        let exists: bool =
+            sqlx::query_scalar("SELECT to_regclass('carmy_schema_version') IS NOT NULL")
+                .fetch_one(&mut *conn)
+                .await?;
+        if !exists {
+            sqlx::query(
+                "CREATE TABLE carmy_schema_version ( \
+                   version INTEGER PRIMARY KEY, \
+                   applied_at TIMESTAMPTZ NOT NULL DEFAULT now() \
+                 )",
+            )
+            .execute(&mut *conn)
+            .await?;
+        }
         let applied: Vec<i32> = sqlx::query_scalar("SELECT version FROM carmy_schema_version")
             .fetch_all(&mut *conn)
             .await?;
@@ -596,8 +612,12 @@ impl IdempotencyStore for PostgresIdempotencyStore {
 /// record is dropped and a warning logged rather than slowing the runtime.
 pub struct PostgresAudit {
     pool: PgPool,
-    sender: tokio::sync::mpsc::Sender<ExecutionRecord>,
-    writer: tokio::task::JoinHandle<()>,
+    capacity: usize,
+    /// Started on the first record, so building an app needs no running runtime.
+    writer: std::sync::OnceLock<(
+        tokio::sync::mpsc::Sender<ExecutionRecord>,
+        tokio::task::JoinHandle<()>,
+    )>,
 }
 
 impl PostgresAudit {
@@ -607,26 +627,33 @@ impl PostgresAudit {
     }
 
     pub fn with_capacity(pool: PgPool, capacity: usize) -> Self {
-        let (sender, mut receiver) = tokio::sync::mpsc::channel::<ExecutionRecord>(capacity.max(1));
-        let writer = tokio::spawn({
-            let pool = pool.clone();
-            async move {
-                while let Some(record) = receiver.recv().await {
-                    if let Err(e) = insert_record(&pool, &record).await {
-                        tracing::warn!(
-                            execution_id = %record.execution_id,
-                            error = %e,
-                            "audit record was not written"
-                        );
-                    }
-                }
-            }
-        });
         Self {
             pool,
-            sender,
-            writer,
+            capacity: capacity.max(1),
+            writer: std::sync::OnceLock::new(),
         }
+    }
+
+    fn sender(&self) -> &tokio::sync::mpsc::Sender<ExecutionRecord> {
+        &self
+            .writer
+            .get_or_init(|| {
+                let (sender, mut receiver) = tokio::sync::mpsc::channel(self.capacity);
+                let pool = self.pool.clone();
+                let writer = tokio::spawn(async move {
+                    while let Some(record) = receiver.recv().await {
+                        if let Err(e) = insert_record(&pool, &record).await {
+                            tracing::warn!(
+                                execution_id = %record.execution_id,
+                                error = %e,
+                                "audit record was not written"
+                            );
+                        }
+                    }
+                });
+                (sender, writer)
+            })
+            .0
     }
 
     /// Up to `limit` records, newest first.
@@ -645,14 +672,17 @@ impl PostgresAudit {
 
     /// Stop accepting records and wait until every buffered one is written.
     pub async fn flush(self) {
-        drop(self.sender);
-        let _ = self.writer.await;
+        if let Some((sender, writer)) = self.writer.into_inner() {
+            drop(sender);
+            let _ = writer.await;
+        }
     }
 }
 
 impl ExecutionSink for PostgresAudit {
+    /// Runs on the execution's task, inside the runtime.
     fn record(&self, record: ExecutionRecord) {
-        if let Err(e) = self.sender.try_send(record) {
+        if let Err(e) = self.sender().try_send(record) {
             tracing::warn!(
                 execution_id = %e.into_inner().execution_id,
                 "audit buffer is full; record dropped"
