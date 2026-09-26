@@ -375,13 +375,14 @@ The same tool, served to the same client ([method and raw results](benches/compa
 
 | MCP over stdio | p50 | throughput | peak memory | cold start |
 |---|---|---|---|---|
-| **Carmy** | 62 µs | 38,900 req/s | 10 MB | 4 ms |
-| TypeScript SDK | 52 µs | 73,300 req/s | 221 MB | 139 ms |
-| Python SDK | 460 µs | 3,100 req/s | 65 MB | 352 ms |
+| **Carmy** | 45 µs | 87,100 req/s | 11 MB | 4 ms |
+| TypeScript SDK | 52 µs | 72,600 req/s | 219 MB | 135 ms |
+| Python SDK | 456 µs | 3,100 req/s | 65 MB | 351 ms |
 
-Over HTTP, Carmy's guarantees add about 7 µs at p50 over a plain Axum handler. Apple M3
+Over HTTP, Carmy's guarantees add about 3–4 µs at p50 over a plain Axum handler. Apple M3
 Pro; reproduce with `benches/compare/run.sh`. The full tables, including where Carmy
-loses, are on the [benchmarks page](https://carmy-pi.vercel.app/reference/benchmarks/#comparisons).
+loses and what changed since 0.1.0, are on the
+[benchmarks page](https://carmy-pi.vercel.app/reference/benchmarks/#comparisons).
 
 `cargo bench -p carmy-benches` measures Carmy's internal overhead. This project makes no
 performance claims that these benchmarks cannot reproduce.

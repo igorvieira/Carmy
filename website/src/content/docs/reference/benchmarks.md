@@ -56,46 +56,73 @@ tables show the median. Each run measures:
 - 10 seconds of load: 32 concurrent callers over MCP, 64 over HTTP
 - peak memory
 
-Apple M3 Pro, 2026-09-26. Two full runs agreed within 5% on latency, throughput and
-memory. Cold starts of a few milliseconds are noisy. Full method, code and raw results:
+Per-call logging is off everywhere. Apple M3 Pro, 2026-09-26. Two full runs agreed within
+3% on latency and throughput; cold starts of a few milliseconds are noisy. Full method,
+code and raw results:
 [`benches/compare`](https://github.com/igorvieira/Carmy/tree/main/benches/compare).
 
 ### MCP over stdio
 
 | server | cold start | p50 | p95 | throughput | p95 under load | peak memory |
 |---|---|---|---|---|---|---|
-| **Carmy** | 4 ms | 62 µs | 71 µs | 38,900 req/s | 966 µs | 10 MB |
-| rmcp, the Rust SDK, without Carmy | 2 ms | 53 µs | 61 µs | 40,900 req/s | 886 µs | 7 MB |
-| TypeScript SDK | 139 ms | 52 µs | 62 µs | 73,300 req/s | 610 µs | 221 MB |
-| Python SDK (`MCPServer`) | 352 ms | 460 µs | 506 µs | 3,100 req/s | 10,774 µs | 65 MB |
+| **Carmy** | 4 ms | 45 µs | 55 µs | 87,100 req/s | 501 µs | 11 MB |
+| **Carmy**, `execution_meta(true)` | 4 ms | 49 µs | 58 µs | 66,200 req/s | 664 µs | 11 MB |
+| rmcp, the Rust SDK, without Carmy | 3 ms | 52 µs | 62 µs | 40,800 req/s | 916 µs | 7 MB |
+| TypeScript SDK | 135 ms | 52 µs | 61 µs | 72,600 req/s | 632 µs | 219 MB |
+| Python SDK (`MCPServer`) | 351 ms | 456 µs | 489 µs | 3,100 req/s | 10,604 µs | 65 MB |
 
 ### HTTP
 
 | server | cold start | p50 | p95 | throughput | p95 under load | peak memory |
 |---|---|---|---|---|---|---|
-| **Carmy** | 6 ms | 52 µs | 62 µs | 143,200 req/s | 772 µs | 13 MB |
-| **Carmy** (1 thread) | 7 ms | 50 µs | 61 µs | 69,600 req/s | 967 µs | 13 MB |
-| Axum, no guarantees | 4 ms | 45 µs | 57 µs | 154,400 req/s | 713 µs | 9 MB |
-| Axum, no guarantees (1 thread) | 4 ms | 43 µs | 55 µs | 113,000 req/s | 619 µs | 9 MB |
-| Express | 135 ms | 64 µs | 77 µs | 44,300 req/s | 1,629 µs | 103 MB |
-| FastAPI (uvicorn) | 205 ms | 310 µs | 352 µs | 6,100 req/s | 14,799 µs | 50 MB |
+| **Carmy** | 4 ms | 48 µs | 60 µs | 150,200 req/s | 727 µs | 13 MB |
+| **Carmy** (1 thread) | 7 ms | 46 µs | 56 µs | 92,300 req/s | 733 µs | 13 MB |
+| Axum, no guarantees | 4 ms | 44 µs | 55 µs | 158,500 req/s | 688 µs | 9 MB |
+| Axum, no guarantees (1 thread) | 4 ms | 43 µs | 53 µs | 113,000 req/s | 621 µs | 10 MB |
+| Express | 132 ms | 65 µs | 79 µs | 44,900 req/s | 1,589 µs | 115 MB |
+| FastAPI (uvicorn) | 205 ms | 313 µs | 353 µs | 6,100 req/s | 13,210 µs | 50 MB |
 
 ### What the numbers say
 
-- **Carmy's guarantees are cheap per call.** Against the same tool behind a plain Axum
-  handler, Carmy adds about 7 µs at p50 and costs 7% of throughput on all cores. On one
-  thread the gap grows to 38%, because per-call work shows up when the tool itself is
-  nearly free.
-- **Memory and cold start.** Carmy uses 4–22× less memory than the Node and Python
-  servers, and starts in milliseconds instead of hundreds of milliseconds. That matters
-  when you run many agent servers, one per session or per tenant.
-- **Against Python,** latency is 6–7× lower and throughput 12–23× higher.
-- **Against Node,** the picture is mixed:
-  - HTTP: Carmy has a lower p50 than Express and 3× its throughput.
-  - MCP: the TypeScript SDK has **higher** throughput under concurrency, 73k against
-    39k req/s.
-  - Rust's `rmcp` without Carmy reaches about the same 41k, so the MCP ceiling here is
-    the Rust SDK's stdio server loop, not Carmy.
+- **MCP:** Carmy has the highest throughput and the lowest latency of these servers:
+  - 87,100 req/s, against 72,600 for the TypeScript SDK.
+  - A p50 of 45 µs, against 52 µs for both the TypeScript SDK and `rmcp`.
+  - Its stdio uses readiness-driven pipes. `rmcp`'s default `stdio()` sends every read
+    and write through tokio's blocking thread pool, which is why plain `rmcp` stops at
+    40,800 req/s.
+- **The cost of the guarantees:**
+  - Against the same tool behind a plain Axum handler, Carmy adds about 3–4 µs at p50.
+  - On all cores it costs 5% of throughput.
+  - On one thread it costs 18%, down from 38% in 0.1.0. When the tool itself is nearly
+    free, per-call validation, deadlines and policies show up.
+- **`execution_meta(true)`** attaches `_meta` (execution ID and status) to every
+  successful MCP result. It costs about 24% of throughput with a client that parses each
+  extra object, such as `rmcp`'s. It is off by default. Errors always carry it.
+- **Memory and cold start:**
+  - Carmy uses 4–20× less memory than the Node and Python servers.
+  - It starts in milliseconds, not hundreds of milliseconds.
+  - It does use about 4 MB more than plain `rmcp` or Axum.
+- **Against Python,** latency is 6–10× lower and throughput 25–28× higher.
+- **Against Node,** throughput is 3.3× higher over HTTP and 1.2× higher over MCP, with
+  lower latency on both.
+
+### Changes since 0.1.0
+
+Each change was found by profiling under this load, and each kept every guarantee:
+
+| change | effect |
+|---|---|
+| MCP stdio over readiness-driven pipes, instead of the blocking thread pool | MCP throughput +58% |
+| The idempotency fingerprint is computed only for requests with a `request_id` | HTTP (1 thread) +4.5% |
+| Execution IDs no longer make a system call per request | HTTP (1 thread) +6% |
+| Lifecycle events are built only when someone is streaming them | HTTP (1 thread) +10% |
+| The deadline timer and cancellation waiter are registered only if the tool suspends | HTTP (1 thread) +6% |
+| The HTTP adapter reads `Accept` without cloning every header | HTTP (1 thread) +2.7% |
+| Execution metadata on successful MCP results became opt-in | MCP throughput +32% |
+
+Overall, MCP throughput went from 38,900 to 87,100 req/s (+124%) and HTTP on one
+thread from 69,600 to 92,300 req/s (+33%). `cargo bench -p carmy-benches` includes a
+`guarantee/*` group with the cost of each guarantee on its own.
 
 ### What the others don't do
 
@@ -118,5 +145,5 @@ The per-call cost buys behavior that the other servers don't provide by default:
 - **Node and Python serve on one thread,** while the Rust servers use every core by
   default. The `(1 thread)` rows compare like with like.
 - **stdio is not a network.** MCP numbers measure JSON-RPC framing and dispatch over a
-  pipe.
+  pipe, with `rmcp`'s Rust client as the caller.
 - **One machine.** Run `benches/compare/run.sh` on yours before relying on these numbers.
