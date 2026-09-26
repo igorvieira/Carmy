@@ -159,12 +159,23 @@ impl Carmy {
     /// |--------------------|---------------------------------------------------|
     /// | *(none)*, `server` | serve HTTP on the configured address              |
     /// | `mcp`              | serve MCP over stdin/stdout                       |
+    /// | `console`          | serve the `carmy-console/1` protocol over stdio   |
     /// | `tools`            | print the tool catalog as JSON and exit           |
     pub async fn run(self) -> Result {
+        let command = std::env::args().nth(1);
+        // The console's stdout carries its protocol, so it logs warnings only by default.
         #[cfg(feature = "observability")]
-        let _ = carmy_observability::init();
-        match std::env::args().nth(1).as_deref() {
+        let _ = carmy_observability::init_with(match command.as_deref() {
+            Some("console") => "warn",
+            _ => "info",
+        });
+        match command.as_deref() {
             None | Some("server") => self.run_http().await,
+            Some("console") => {
+                let name = self.name.clone();
+                let input = tokio::io::BufReader::new(tokio::io::stdin());
+                Ok(crate::console::serve(self.build()?, &name, input, tokio::io::stdout()).await?)
+            }
             Some("mcp") => self.run_mcp().await,
             Some("tools") => {
                 let catalog = serde_json::to_string_pretty(&self.build()?.tools())
@@ -173,7 +184,7 @@ impl Carmy {
                 Ok(())
             }
             Some(other) => Err(Error::Usage(format!(
-                "unknown command `{other}`; expected `server`, `mcp` or `tools`"
+                "unknown command `{other}`; expected `server`, `mcp`, `console` or `tools`"
             ))),
         }
     }

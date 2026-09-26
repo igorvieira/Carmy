@@ -45,6 +45,11 @@ where
 /// Install a global subscriber filtered by `RUST_LOG` (default `info`).
 /// Returns an error if a global subscriber is already set.
 pub fn init() -> Result<(), tracing::subscriber::SetGlobalDefaultError> {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    init_with("info")
+}
+
+/// Like [`init`], with `default` as the filter when `RUST_LOG` is unset.
+pub fn init_with(default: &str) -> Result<(), tracing::subscriber::SetGlobalDefaultError> {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
     tracing::subscriber::set_global_default(Registry::default().with(filter).with(fmt_layer()))
 }

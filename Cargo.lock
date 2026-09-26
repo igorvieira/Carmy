@@ -203,6 +203,7 @@ dependencies = [
  "carmy-observability",
  "carmy-runtime",
  "carmy-schema",
+ "futures-util",
  "linkme",
  "schemars",
  "serde",

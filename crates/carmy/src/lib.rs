@@ -34,6 +34,7 @@ pub use carmy_schema::schema;
 pub use {schemars, serde, serde_json};
 mod app;
 mod config;
+pub mod console;
 mod state;
 pub use app::{Carmy, DEFAULT_ADDRESS, Error, Result, app, run};
 pub use config::Config;
