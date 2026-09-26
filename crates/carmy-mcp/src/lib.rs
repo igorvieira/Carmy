@@ -14,6 +14,8 @@
 //!   which clients validate against the output schema. An unknown tool is a JSON-RPC
 //!   invalid-params error.
 //! - `_meta["carmy/request_id"]` on `tools/call` is the idempotency identity.
+//! - Errors carry `_meta["carmy/execution_id"]` and `_meta["carmy/status"]`; successful
+//!   results do too with [`McpServer::execution_meta`].
 use carmy_core::*;
 use carmy_runtime::{Runtime, execution_request};
 use rmcp::{
@@ -37,6 +39,7 @@ pub struct McpServer {
     context: AgentContext,
     tools: Arc<[McpTool]>,
     name: String,
+    execution_meta: bool,
 }
 impl McpServer {
     pub fn new(runtime: Arc<Runtime>) -> Self {
@@ -46,6 +49,7 @@ impl McpServer {
             context: AgentContext::default(),
             tools,
             name: "carmy".into(),
+            execution_meta: false,
         }
     }
     /// Trusted context applied to every call on this connection, e.g. the
@@ -56,6 +60,13 @@ impl McpServer {
     }
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.name = name.into();
+        self
+    }
+    /// Also attach `_meta["carmy/execution_id"]` and `_meta["carmy/status"]` to successful
+    /// results, e.g. to correlate calls with traces. Off by default: every extra object
+    /// costs clients a parse on each response. Errors always carry them.
+    pub fn execution_meta(mut self, enabled: bool) -> Self {
+        self.execution_meta = enabled;
         self
     }
     /// Serve a single client over stdin/stdout until it disconnects.
@@ -134,21 +145,37 @@ fn request_id(params: &CallToolRequestParams, ctx: &RequestContext<RoleServer>) 
 /// Errors never use `structuredContent`: clients validate it against the tool's output
 /// schema even when `isError` is set. The error travels as JSON text for the model and,
 /// complete, in `_meta["carmy/error"]` for programs.
-fn to_mcp(result: ExecutionResult) -> CallToolResult {
-    let mut meta = JsonObject::new();
-    meta.insert("carmy/status".into(), result.status.as_str().into());
-    meta.insert("carmy/execution_id".into(), result.execution_id.into());
-    let call = match result.outcome {
-        Ok(value @ Value::Object(_)) => CallToolResult::structured(value),
-        Ok(value) => CallToolResult::success(vec![ContentBlock::text(value.to_string())]),
+fn to_mcp(result: ExecutionResult, execution_meta: bool) -> CallToolResult {
+    let ExecutionResult {
+        execution_id,
+        status,
+        outcome,
+    } = result;
+    let meta = move || {
+        let mut meta = JsonObject::new();
+        meta.insert("carmy/status".into(), status.as_str().into());
+        meta.insert("carmy/execution_id".into(), execution_id.into());
+        meta
+    };
+    match outcome {
+        Ok(value) => {
+            let call = match value {
+                value @ Value::Object(_) => CallToolResult::structured(value),
+                value => CallToolResult::success(vec![ContentBlock::text(value.to_string())]),
+            };
+            match execution_meta {
+                true => call.with_meta(Some(MetaObject(meta()))),
+                false => call,
+            }
+        }
         Err(error) => {
+            let mut meta = meta();
             let error = serde_json::to_value(error).expect("AgentError serializes");
             let text = json!({ "error": &error }).to_string();
             meta.insert("carmy/error".into(), error);
-            CallToolResult::error(vec![ContentBlock::text(text)])
+            CallToolResult::error(vec![ContentBlock::text(text)]).with_meta(Some(MetaObject(meta)))
         }
-    };
-    call.with_meta(Some(MetaObject(meta)))
+    }
 }
 impl ServerHandler for McpServer {
     fn get_info(&self) -> ServerConfig {
@@ -187,6 +214,6 @@ impl ServerHandler for McpServer {
                 Some(json!({ "error": error })),
             ));
         }
-        Ok(to_mcp(result).into())
+        Ok(to_mcp(result, self.execution_meta).into())
     }
 }

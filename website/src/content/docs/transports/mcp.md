@@ -54,7 +54,7 @@ Logs go to stderr, so stdout stays reserved for the protocol.
 | `AgentError` | `isError: true`, with `{"error": …}` as JSON text content and in `_meta["carmy/error"]`; never in `structuredContent`, which clients validate against the output schema |
 | unknown tool | JSON-RPC `-32602`, with `data.error` |
 | `_meta["carmy/request_id"]` on `tools/call` | the idempotency `request_id` |
-| execution ID and status | result `_meta["carmy/execution_id"]` and `_meta["carmy/status"]` |
+| execution ID and status | result `_meta["carmy/execution_id"]` and `_meta["carmy/status"]`: always on errors, on successes with `McpServer::execution_meta(true)` |
 
 ## Explicit setup
 

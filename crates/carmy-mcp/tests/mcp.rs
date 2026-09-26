@@ -87,7 +87,8 @@ async fn invokes_runtime_and_converts_errors() {
         .unwrap();
     assert_eq!(ok.is_error, Some(false));
     assert_eq!(ok.structured_content.unwrap()["id"], 0);
-    assert_eq!(ok.meta.unwrap().0["carmy/status"], "completed");
+    // Successful results carry no `_meta` unless execution_meta is enabled.
+    assert!(ok.meta.is_none());
     let failed = client
         .call_tool(call("create_user", json!({"name":""})))
         .await
@@ -169,4 +170,37 @@ async fn mcp_cancellation_reaches_the_execution() {
     tokio::time::timeout(std::time::Duration::from_secs(1), cancelled.notified())
         .await
         .expect("MCP cancellation must cancel the execution token");
+}
+
+#[tokio::test]
+async fn execution_meta_is_opt_in_for_successes() {
+    let runtime = Arc::new(Runtime::new().tool(Create(Arc::default())).unwrap());
+    let (server, client) = tokio::io::duplex(64 * 1024);
+    tokio::spawn(async move {
+        let running = McpServer::new(runtime)
+            .execution_meta(true)
+            .serve(server)
+            .await
+            .unwrap();
+        running.waiting().await.unwrap();
+    });
+    let client = ().serve(client).await.unwrap();
+    let ok = client
+        .call_tool(call("create_user", json!({"name":"ada"})))
+        .await
+        .unwrap();
+    let meta = ok.meta.unwrap();
+    assert_eq!(meta.0["carmy/status"], "completed");
+    assert!(
+        meta.0["carmy/execution_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("exec_")
+    );
+    // Errors carry execution metadata whether or not it is enabled.
+    let failed = client
+        .call_tool(call("create_user", json!({"name":""})))
+        .await
+        .unwrap();
+    assert_eq!(failed.meta.unwrap().0["carmy/status"], "failed");
 }
