@@ -5,8 +5,8 @@
 //! Wire DTOs live here; runtime types never serialize directly onto the wire.
 use axum::{
     Extension, Json, Router,
-    extract::{DefaultBodyLimit, State, rejection::JsonRejection},
-    http::{HeaderMap, StatusCode, header},
+    extract::{DefaultBodyLimit, FromRequestParts, State, rejection::JsonRejection},
+    http::{HeaderMap, StatusCode, header, request::Parts},
     response::{
         IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
@@ -230,18 +230,26 @@ fn status_of(error: Option<&AgentError>) -> StatusCode {
         ErrorCategory::Internal => StatusCode::INTERNAL_SERVER_ERROR,
     })
 }
-fn wants_stream(headers: &HeaderMap) -> bool {
-    headers
-        .get(header::ACCEPT)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.contains("text/event-stream"))
+/// Whether the client asked for SSE. Reads the `Accept` header in place instead of
+/// cloning the whole header map, as the `HeaderMap` extractor would.
+struct WantsStream(bool);
+impl<S: Send + Sync> FromRequestParts<S> for WantsStream {
+    type Rejection = Infallible;
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Infallible> {
+        let accept = parts.headers.get(header::ACCEPT);
+        Ok(Self(
+            accept
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|v| v.contains("text/event-stream")),
+        ))
+    }
 }
 /// Dropping this handler or its event stream (client disconnect) cancels the execution's
 /// token; the runtime keeps the idempotency reservation so a retry reports uncertainty.
 async fn execute(
     State(state): State<HttpState>,
     context: Option<Extension<AgentContext>>,
-    headers: HeaderMap,
+    WantsStream(stream): WantsStream,
     payload: Result<Json<ExecuteDto>, JsonRejection>,
 ) -> Response {
     let request = match decode(payload, context) {
@@ -249,7 +257,7 @@ async fn execute(
         Err(response) => return *response,
     };
     let reusable = reusable(state.runtime.metadata(&request.tool));
-    if wants_stream(&headers) {
+    if stream {
         let events = state
             .runtime
             .execute_stream(request)
