@@ -84,6 +84,34 @@ fn generated_project_passes_its_tests() {
         .status()
         .unwrap();
     assert!(fmt.success(), "generated code is not rustfmt-clean");
+    // Agents speak carmy-console/1 to the generated application over stdio.
+    let mut console = Command::new(env!("CARGO"))
+        .args(["run", "--quiet", "--", "console"])
+        .current_dir(&root)
+        .env("CARGO_TARGET_DIR", workspace().join("target"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        use std::io::Write;
+        let mut stdin = console.stdin.take().unwrap();
+        writeln!(stdin, r#"{{"id":1,"op":"tools"}}"#).unwrap();
+        writeln!(
+            stdin,
+            r#"{{"id":2,"op":"call","tool":"hello","arguments":{{"name":"Ada"}}}}"#
+        )
+        .unwrap();
+    }
+    let output = console.wait_with_output().unwrap();
+    let lines: Vec<serde_json::Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines[0]["protocol"], "carmy-console/1");
+    assert_eq!(lines[1]["result"]["tools"].as_array().unwrap().len(), 4);
+    assert_eq!(lines[2]["result"]["data"]["message"], "Hello, Ada!");
     let status = Command::new(env!("CARGO"))
         .arg("test")
         .current_dir(&root)

@@ -1,4 +1,5 @@
 //! Generators behind `carmy new` and `carmy generate tool`.
+pub mod console;
 mod tool;
 use std::{
     fmt, fs, io,

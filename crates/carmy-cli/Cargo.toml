@@ -13,3 +13,5 @@ name = "carmy"
 path = "src/main.rs"
 
 [dependencies]
+ratatui = "0.30"
+serde_json.workspace = true

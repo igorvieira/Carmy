@@ -1,4 +1,4 @@
-use carmy_cli::{Dependency, find_project, generate, generate_tool};
+use carmy_cli::{Dependency, console, find_project, generate, generate_tool};
 use std::{path::PathBuf, process::ExitCode};
 
 const USAGE: &str = "\
@@ -9,11 +9,16 @@ Usage:
   carmy generate tool <name> --effect <effect> [--description <text>]
                                                   Add a tool to the current application
   carmy g tool ...                                Shorthand for `generate tool`
+  carmy console [--jsonl]                         Explore and call the tools (terminal UI)
+  carmy server                                    Serve the application over HTTP
   carmy --version
 
 Options for `new`:
   --git          Depend on the main branch of the Git repository instead of crates.io
   --path <dir>   Depend on a local Carmy checkout instead of crates.io
+
+Options for `console`:
+  --jsonl                 Speak carmy-console/1 (JSON Lines) on stdio, for agents and scripts
 
 Options for `generate tool`:
   --effect <effect>       none, read, write, external_write or destructive (required)
@@ -33,6 +38,9 @@ fn main() -> ExitCode {
             new(name, Dependency::Path(PathBuf::from(path)))
         }
         ["generate" | "g", "tool", name, rest @ ..] => tool(name, rest),
+        ["console"] => in_project(|project| console::run(project, false)),
+        ["console", "--jsonl"] => in_project(|project| console::run(project, true)),
+        ["server" | "s"] => in_project(|project| console::cargo_run(project, &["server"])),
         ["--version" | "-V"] => {
             println!("carmy {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
@@ -43,6 +51,20 @@ fn main() -> ExitCode {
         }
         _ => {
             eprintln!("{USAGE}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Runs `action` at the root of the application containing the current directory.
+fn in_project(action: impl FnOnce(&std::path::Path) -> ExitCode) -> ExitCode {
+    match std::env::current_dir()
+        .map_err(carmy_cli::Error::from)
+        .and_then(|dir| find_project(&dir))
+    {
+        Ok(project) => action(&project),
+        Err(e) => {
+            eprintln!("error: {e}");
             ExitCode::FAILURE
         }
     }
