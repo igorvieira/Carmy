@@ -1,0 +1,22 @@
+name: Feature request
+description: Propose a capability for Carmy.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What agent or tool scenario is hard or impossible today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What you'd like Carmy to do. API sketches are welcome.
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Architecture
+      options:
+        - label: This keeps transports (HTTP, MCP) out of the core and runtime.
