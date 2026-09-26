@@ -5,7 +5,7 @@ sidebar:
   order: 6
 ---
 
-Carmy is at `0.3.0`, and its API is unstable during 0.x.
+Carmy is at `0.4.0`, and its API is unstable during 0.x.
 
 ## Next
 
@@ -13,8 +13,11 @@ Carmy is at `0.3.0`, and its API is unstable during 0.x.
   existing runtime.
 - **Tool progress events:** progress and partial results emitted by tools into the event
   stream.
-- **Transports:** MCP Streamable HTTP, and approvals through MCP elicitation.
-- **Idempotency stores:** durable adapters (Postgres, Redis) as separate crates.
+- **Transports:** MCP Streamable HTTP, approvals through MCP elicitation, and MCP tasks
+  on top of [jobs](/guides/jobs/).
+- **Stores:** a Redis job and idempotency store next to the Postgres one.
+- **Console:** the audit trail and the dead-letter queue in the terminal UI, not only
+  over the protocol.
 - **Sources of tools:** adapters that turn an existing GraphQL or OpenAPI API into Carmy
   tools, so its operations get effects, confirmation and replay-safe retries before an
   agent touches them. GraphQL is not a transport: agents call tools over MCP and HTTP.

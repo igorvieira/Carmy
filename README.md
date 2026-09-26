@@ -263,8 +263,45 @@ name, arguments and metadata.
 
 Timeouts and cancellations are recorded as results too. External effects may already have
 committed, so a retry never silently repeats them. `InMemoryIdempotencyStore` is bounded
-and fails closed when full. Implement `IdempotencyStore` to add durable storage, such as
-Redis or Postgres.
+and fails closed when full. `carmy::postgres::PostgresIdempotencyStore` (feature
+`postgres`) shares reservations across instances; implement `IdempotencyStore` for
+anything else.
+
+## Jobs, webhooks and audit
+
+Some work should not happen inside a request. A job is an `ExecutionRequest` with a
+`request_id` that runs later, through the same runtime:
+
+```rust
+jobs.enqueue(execution_request("publish_premium", json!({ "deal_id": id }))
+    .with_request_id(format!("publish-{id}-premium"))).await?;   // never twice
+jobs.enqueue_after(request, Duration::from_secs(24 * 3600)).await?;
+
+carmy::app()
+    .jobs(Arc::new(PostgresJobStore::new(pool.clone())))            // or the in-memory default
+    .schedule("collect", "0 */5 * * * * *", || execution_request("collect_offers", json!({})))
+    .webhook("/webhooks/stripe", Webhook::stripe(secret).tool("membership_event").enqueue())
+    .ready("database", move || carmy::postgres::ready(pool.clone()))
+    .routes(site)
+    .run().await   // `cargo run -- worker` runs the jobs
+```
+
+- **Retries follow the error:** `retryable` errors back off and try again up to
+  `max_attempts`; uncertain outcomes (`TIMEOUT`, `CANCELLED`, `TOOL_PANIC`) retry only
+  idempotent tools and otherwise go to the dead-letter queue, where a person or an agent
+  decides.
+- **Webhooks are tools:** the delivery is verified on the raw body (Stripe, Telegram or
+  any HMAC-SHA256 header), the provider's event id becomes the `request_id`, and a
+  redelivery replays.
+- **Every execution is audited:** who ran what, when, and how it ended, never the
+  arguments or outputs. `carmy console` shows the trail with `audit` and the dead letters
+  with `dead`.
+- **`/health` and `/ready`** answer for orchestrators, and the app's own routes and
+  commands live next to the agent routes.
+
+`examples/curator` puts all of it together. Guides: [Jobs](https://carmy-pi.vercel.app/guides/jobs/),
+[Webhooks](https://carmy-pi.vercel.app/guides/webhooks/), [Audit](https://carmy-pi.vercel.app/guides/audit/),
+[Readiness and routes](https://carmy-pi.vercel.app/guides/readiness/).
 
 ## Streaming
 
@@ -323,12 +360,14 @@ not support.
 | crate                 | role                                                                  |
 |-----------------------|-----------------------------------------------------------------------|
 | `carmy`               | facade: `carmy::app()`, `State`, config, `testing`, `prelude`, feature-gated transports |
-| `carmy-cli`           | `carmy new`                                                           |
+| `carmy-cli`           | `carmy new`, `carmy g tool`, `carmy console`, `carmy server`         |
 | `carmy-core`          | domain: `Tool`, `ToolMetadata`, `Effect`, `AgentError`, `AgentContext`, execution types |
 | `carmy-schema`        | JSON Schema generation                                                |
 | `carmy-macros`        | `#[carmy::tool]`                                                      |
-| `carmy-runtime`       | registry, policies, validation, idempotency, cancellation, event stream |
-| `carmy-http`          | discovery, tool catalog, execution and SSE over Axum                  |
+| `carmy-runtime`       | registry, policies, validation, idempotency, cancellation, event stream, audit sinks |
+| `carmy-http`          | discovery, tool catalog, execution and SSE over Axum; webhooks, `/health`, `/ready` |
+| `carmy-jobs`          | tools that run later: queue, retries, dead letters, schedules, worker |
+| `carmy-postgres`      | durable stores: jobs (with an outbox), idempotency and audit          |
 | `carmy-mcp`           | MCP server adapter over `rmcp`                                        |
 | `carmy-observability` | tracing subscriber setup and OpenTelemetry composition                |
 
@@ -399,9 +438,9 @@ performance claims that these benchmarks cannot reproduce.
 
 - **Execution plans:** DAGs of tool calls with `$step.field` references, built on today's `ExecutionRequest` and runtime.
 - **Tool progress events:** progress and partial results emitted from tools into the event stream.
-- **Transports:** MCP Streamable HTTP, and a `next_actions` vocabulary.
-- **Idempotency:** durable `IdempotencyStore` adapters as separate crates.
-- **Publishing:** a first crates.io release.
+- **Transports:** MCP Streamable HTTP, MCP tasks on top of jobs, and a `next_actions` vocabulary.
+- **Stores:** a Redis job and idempotency store next to the Postgres one.
+- **Console:** the audit trail and the dead-letter queue in the terminal UI.
 
 Carmy will not add its own async runtime, HTTP parser, TLS stack, ORM, workflow engine,
 agent memory, LLM abstraction or prompt framework.

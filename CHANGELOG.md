@@ -6,6 +6,37 @@ All notable changes to Carmy are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`carmy-jobs`: tools that run later.** `Jobs` enqueues an `ExecutionRequest` now,
+  after a delay or at a time, and `every(name, cron, make)` schedules it. A job's
+  `request_id` is its identity, so enqueueing twice never runs twice. Retries follow the
+  error: `retryable` errors back off exponentially (respecting `retry_after`) up to
+  `max_attempts`; uncertain outcomes (`TIMEOUT`, `CANCELLED`, `TOOL_PANIC`) retry only
+  idempotent tools and otherwise dead-letter with `EXECUTION_UNCERTAIN`. `cargo run --
+  worker` runs jobs with leases, heartbeats and graceful shutdown; `[jobs]` in
+  `carmy.toml` sets `concurrency` and `max_attempts`; tools take `State<Jobs>`.
+- **`carmy-postgres`** (feature `postgres`): `PostgresJobStore` (claims with `FOR UPDATE
+  SKIP LOCKED`, a transactional outbox through `enqueue_in`), `PostgresIdempotencyStore`
+  (atomic reservations shared across instances) and `PostgresAudit`, plus `migrate` and
+  `ready`. The contract tests run against a Postgres service in CI.
+- **Webhooks as tools.** `Carmy::webhook(path, Webhook::stripe(..) | telegram(..) |
+  hmac_sha256(..))` verifies the delivery on the raw body in constant time, uses the
+  provider's event id as `request_id` so redeliveries replay, and runs the tool inline or
+  as a job (`.enqueue()`, answering `202`).
+- **Audit trail.** `ExecutionSink` receives an `ExecutionRecord` after every execution,
+  replays and rejections included, never with arguments or outputs. Every app keeps the
+  latest records in memory; `.sink(..)` adds durable ones. The console gains `audit` and
+  `dead`.
+- **Readiness, routes and commands.** `GET /health`, `GET /ready` (every `.ready(name,
+  check)` together, with a timeout, `503` naming what failed, `.require_worker(within)`
+  for the queue), `Carmy::routes(axum::Router)` behind the same hardening,
+  `Carmy::command(name, run)` for the app's own commands, and `Carmy::router_and_jobs`.
+- **`examples/curator`,** the reference pipeline application: a scheduled collection,
+  one job per offer, publications that never duplicate, a Stripe webhook, `/ready`,
+  `/deals`, and Postgres behind `DATABASE_URL`. Its end-to-end test runs two workers, a
+  refused publication and a redelivered webhook.
+
 ### Security
 
 - **Connection-level protections** in `ServerOptions`, on by default: a header timeout

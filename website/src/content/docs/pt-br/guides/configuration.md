@@ -24,6 +24,13 @@ A tabela `[http]` guarda as proteções do servidor (veja
 | `http.max_connections` | `CARMY_HTTP_MAX_CONNECTIONS` | `4096` |
 | `http.security_headers` | `CARMY_HTTP_SECURITY_HEADERS` | `false` |
 
+A tabela `[jobs]` configura o worker (veja [Jobs](/pt-br/guides/jobs/)):
+
+| chave | variável de ambiente | padrão |
+|-------|----------------------|--------|
+| `jobs.concurrency` | `CARMY_JOBS_CONCURRENCY` | `4` |
+| `jobs.max_attempts` | `CARMY_JOBS_MAX_ATTEMPTS` | `5` |
+
 `CARMY_CONFIG=caminho/para/arquivo.toml` lê outro arquivo. Chaves desconhecidas são
 erros, então erros de digitação não passam despercebidos:
 
@@ -41,6 +48,8 @@ O `run()` escolhe o que fazer pelo primeiro argumento da linha de comando:
 | `mcp` | serve MCP via stdin/stdout |
 | `tools` | imprime o catálogo de tools em JSON e sai |
 | `console` | serve `carmy-console/1` pelo stdio (veja [Console](/pt-br/guides/console/)) |
+| `worker` | roda os jobs e os agendamentos (veja [Jobs](/pt-br/guides/jobs/)) |
+| *(seus)* | qualquer um adicionado com `.command(..)` (veja [Readiness e rotas](/pt-br/guides/readiness/#comandos-próprios)) |
 
 ## Builder
 
@@ -53,6 +62,11 @@ carmy::app()
     .timeout(std::time::Duration::from_secs(10))
     .state(db)
     .policy(RequireToolPermission)
+    .jobs(Arc::new(PostgresJobStore::new(pool.clone())))
+    .schedule("collect", "0 */5 * * * * *", || execution_request("collect_offers", json!({})))
+    .webhook("/webhooks/stripe", Webhook::stripe(secret).tool("membership_event").enqueue())
+    .ready("database", move || carmy::postgres::ready(pool.clone()))
+    .routes(site)
     .run()
     .await
 ```
@@ -66,6 +80,7 @@ O `Carmy::new()` ignora por completo o arquivo, o ambiente e o registro automát
 | `http` | sim | `carmy::http`, `.router()`, `.listen()` |
 | `mcp` | sim | `carmy::mcp`, `.serve_mcp_stdio()` |
 | `observability` | sim | o subscriber de tracing instalado pelo `run()` |
+| `postgres` | não | `carmy::postgres`: stores duráveis de jobs, idempotência e auditoria |
 
 ```toml
 carmy = { version = "0.3", default-features = false, features = ["http"] }

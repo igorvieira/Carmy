@@ -28,11 +28,13 @@ sidebar:
 | `carmy-core` | the domain: `Tool`, `ToolMetadata`, `Effect`, `AgentError`, `AgentContext`, execution types |
 | `carmy-schema` | JSON Schema generation |
 | `carmy-macros` | `#[carmy::tool]` |
-| `carmy-runtime` | registry, policies, validation, idempotency, cancellation, event stream |
-| `carmy-http` | discovery, catalog, execution and SSE over Axum |
+| `carmy-runtime` | registry, policies, validation, idempotency, cancellation, event stream, audit sinks |
+| `carmy-http` | discovery, catalog, execution and SSE over Axum; webhooks, `/health` and `/ready` |
+| `carmy-jobs` | tools that run later: queue, retries, dead letters, schedules, worker |
+| `carmy-postgres` | durable stores: jobs (with an outbox), idempotency and audit |
 | `carmy-mcp` | the MCP server adapter over `rmcp` |
 | `carmy-observability` | tracing subscriber setup |
-| `carmy-cli` | `carmy new` |
+| `carmy-cli` | `carmy new`, `carmy g tool`, `carmy console`, `carmy server` |
 
 `carmy-core` has no dependencies on HTTP, MCP, databases or LLM providers.
 

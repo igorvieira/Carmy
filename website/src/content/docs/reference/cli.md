@@ -69,5 +69,7 @@ A Carmy application built with `carmy::run()` accepts:
 | `cargo run -- mcp` | serve MCP over stdio |
 | `cargo run -- tools` | print the tool catalog as JSON |
 | `cargo run -- console` | serve `carmy-console/1` on stdio |
+| `cargo run -- worker` | run the jobs and the schedules |
+| `cargo run -- <yours>` | a command added with `.command(..)` |
 
 The same commands work on the compiled binary: `./target/release/shop mcp`.
