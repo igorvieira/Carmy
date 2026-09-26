@@ -14,6 +14,7 @@ Results land in `results/<date>.jsonl` and `results/<date>.md`.
 | transport | contender | code |
 |-----------|-----------|------|
 | MCP (stdio) | Carmy | `src/bin/carmy_mcp.rs` |
+| MCP (stdio) | Carmy with `execution_meta(true)` (`_meta` on every result) | `src/bin/carmy_mcp_meta.rs` |
 | MCP (stdio) | rmcp, the official Rust SDK, without Carmy | `src/bin/rmcp_mcp.rs` |
 | MCP (stdio) | the official TypeScript SDK (`McpServer`) | `node/mcp.mjs` |
 | MCP (stdio) | the official Python SDK (`MCPServer`, formerly FastMCP) | `python/mcp_server.py` |

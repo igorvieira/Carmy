@@ -29,6 +29,7 @@ http1() {
 }
 
 mcp "Carmy" $T/carmy_mcp mcp
+mcp "Carmy (execution_meta on)" $T/carmy_mcp_meta
 mcp "rmcp (no Carmy)" $T/rmcp_mcp
 mcp "TypeScript SDK" node node/mcp.mjs
 mcp "Python SDK (MCPServer)" python/.venv/bin/python python/mcp_server.py
