@@ -216,6 +216,9 @@ fn expand(args: proc_macro2::TokenStream, f: ItemFn) -> syn::Result<proc_macro2:
                     confirmation: ::carmy::Confirmation::#confirmation,
                 }
             }
+            fn generated_schemas(&self) -> bool {
+                true
+            }
             #[allow(unused_variables)]
             async fn execute(
                 &self,

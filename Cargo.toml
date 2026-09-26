@@ -17,3 +17,8 @@ schemars = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "net", "io-std"] }
 tokio-util = "0.7"
 tracing = "0.1"
+
+# Until `ValidationOptions::should_validate_schema` is released upstream:
+# https://github.com/Stranger6667/jsonschema/pull/1666
+[patch.crates-io]
+jsonschema = { git = "https://github.com/igorvieira/jsonschema", branch = "should-validate-schema" }

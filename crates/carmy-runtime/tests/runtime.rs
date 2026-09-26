@@ -317,3 +317,26 @@ async fn deadline_applies_once_a_tool_suspends() {
     assert_eq!(result.outcome.unwrap_err().code, "TIMEOUT");
     assert!(started.elapsed() < Duration::from_secs(1));
 }
+struct HandWritten;
+impl Tool for HandWritten {
+    type Input = String;
+    type Output = String;
+    fn metadata(&self) -> ToolMetadata {
+        let mut m = Echo(Effect::Read).metadata();
+        m.name = "hand_written".into();
+        // `title` must be a string: the meta-schema rejects this schema.
+        m.input_schema = json!({"type": "string", "title": 5});
+        m
+    }
+    async fn execute(&self, _: AgentContext, input: String) -> AgentResult<String> {
+        Ok(input)
+    }
+}
+#[test]
+fn hand_written_schemas_are_still_checked_against_the_meta_schema() {
+    let err = Runtime::new()
+        .tool(HandWritten)
+        .err()
+        .expect("invalid schema");
+    assert_eq!(err.code, "INVALID_SCHEMA");
+}

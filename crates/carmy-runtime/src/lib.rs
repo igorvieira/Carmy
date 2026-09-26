@@ -115,6 +115,12 @@ impl Runtime {
     /// Like [`Runtime::tool`], keeping the runtime usable when registration fails.
     pub fn register<T: Tool>(&mut self, tool: T) -> AgentResult<()> {
         let metadata = tool.metadata();
+        // Generated schemas are valid by construction; checking them against the
+        // meta-schema would load every JSON Schema draft (~2.4 MB) for nothing.
+        let mut options = jsonschema::options();
+        if tool.generated_schemas() {
+            options = options.should_validate_schema(false);
+        }
         if metadata.name.is_empty()
             || metadata.name.len() > 128
             || !metadata
@@ -135,14 +141,14 @@ impl Runtime {
                 ErrorCategory::Conflict,
             ));
         }
-        let input = jsonschema::validator_for(&metadata.input_schema).map_err(|_| {
+        let input = options.build(&metadata.input_schema).map_err(|_| {
             error(
                 "INVALID_SCHEMA",
                 "Invalid input schema",
                 ErrorCategory::Validation,
             )
         })?;
-        let output = jsonschema::validator_for(&metadata.output_schema).map_err(|_| {
+        let output = options.build(&metadata.output_schema).map_err(|_| {
             error(
                 "INVALID_SCHEMA",
                 "Invalid output schema",

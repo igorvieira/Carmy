@@ -145,6 +145,14 @@ pub trait Tool: Send + Sync + 'static {
         ctx: AgentContext,
         input: Self::Input,
     ) -> impl Future<Output = AgentResult<Self::Output>> + Send;
+    /// Whether `metadata()` returns schemas generated from `Input` and `Output` with
+    /// [`schemars`], which are valid JSON Schema by construction. The runtime then skips
+    /// checking them against the JSON Schema meta-schema. `#[carmy::tool]` returns `true`;
+    /// hand-written schemas keep the default and are always checked.
+    #[doc(hidden)]
+    fn generated_schemas(&self) -> bool {
+        false
+    }
 }
 #[derive(Debug, Clone)]
 pub struct ExecutionRequest {
