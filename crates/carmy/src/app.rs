@@ -54,6 +54,8 @@ pub struct Carmy {
     runtime: carmy_runtime::Runtime,
     name: String,
     address: Option<String>,
+    #[cfg(feature = "http")]
+    http: carmy_http::ServerOptions,
     error: Option<Error>,
     pub(crate) states: StateMap,
     /// Registration waits for `build`, so `.state(..)` may follow `.tool(..)`.
@@ -71,6 +73,8 @@ impl Carmy {
             runtime: carmy_runtime::Runtime::new(),
             name: "carmy".into(),
             address: None,
+            #[cfg(feature = "http")]
+            http: carmy_http::ServerOptions::default(),
             error: None,
             states: StateMap::default(),
             tools: Vec::new(),
@@ -86,6 +90,12 @@ impl Carmy {
         self.address = Some(address.into());
         self
     }
+    /// HTTP timeouts, connection limit, security headers and CORS.
+    #[cfg(feature = "http")]
+    pub fn http(mut self, options: carmy_http::ServerOptions) -> Self {
+        self.http = options;
+        self
+    }
     /// Apply a loaded configuration.
     pub fn config(mut self, config: Config) -> Self {
         if let Some(name) = config.name {
@@ -96,6 +106,22 @@ impl Carmy {
         }
         if let Some(seconds) = config.timeout_secs {
             self = self.timeout(Duration::from_secs(seconds));
+        }
+        #[cfg(feature = "http")]
+        {
+            let http = &config.http;
+            if let Some(seconds) = http.header_timeout_secs {
+                self.http.header_timeout = Duration::from_secs(seconds);
+            }
+            if let Some(seconds) = http.body_timeout_secs {
+                self.http.body_timeout = Duration::from_secs(seconds);
+            }
+            if let Some(max) = http.max_connections {
+                self.http.max_connections = max;
+            }
+            if let Some(enabled) = http.security_headers {
+                self.http.security_headers = enabled;
+            }
         }
         self
     }
@@ -133,15 +159,16 @@ impl Carmy {
         }
         Ok(Arc::new(self.runtime))
     }
+    /// The HTTP router, with the per-request protections from [`Carmy::http`].
     #[cfg(feature = "http")]
     pub fn router(self) -> Result<axum::Router, Error> {
-        let name = self.name.clone();
-        Ok(carmy_http::router(self.build()?, name))
+        let (name, options) = (self.name.clone(), self.http.clone());
+        Ok(carmy_http::router_with(self.build()?, name, &options))
     }
     #[cfg(feature = "http")]
     pub async fn listen(self, address: impl tokio::net::ToSocketAddrs) -> Result<(), Error> {
-        let name = self.name.clone();
-        Ok(carmy_http::serve(self.build()?, address, name).await?)
+        let (name, options) = (self.name.clone(), self.http.clone());
+        Ok(carmy_http::serve_with(self.build()?, address, name, &options).await?)
     }
     #[cfg(feature = "mcp")]
     pub fn mcp(self) -> Result<carmy_mcp::McpServer, Error> {
@@ -194,10 +221,11 @@ impl Carmy {
             .address
             .clone()
             .unwrap_or_else(|| DEFAULT_ADDRESS.into());
+        let options = self.http.clone();
         let router = self.router()?;
         let listener = tokio::net::TcpListener::bind(&address).await?;
         eprintln!("carmy: serving HTTP on http://{address}/.well-known/agent");
-        Ok(axum::serve(listener, router).await?)
+        Ok(carmy_http::serve_listener(listener, router, &options).await?)
     }
     #[cfg(not(feature = "http"))]
     async fn run_http(self) -> Result {

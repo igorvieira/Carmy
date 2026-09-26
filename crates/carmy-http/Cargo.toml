@@ -16,6 +16,9 @@ categories = ["web-programming::http-server", "asynchronous"]
 carmy-core = { path = "../carmy-core", version = "0.3.0" }
 carmy-runtime = { path = "../carmy-runtime", version = "0.3.0" }
 axum = "0.8"
+hyper = { version = "1", features = ["server", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["server", "server-auto", "http1", "http2", "tokio", "service"] }
+tower-http = { version = "0.6", features = ["cors", "set-header", "timeout"] }
 futures-util = "0.3"
 serde.workspace = true
 serde_json.workspace = true

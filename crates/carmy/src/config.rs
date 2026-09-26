@@ -15,6 +15,25 @@ pub struct Config {
     pub name: Option<String>,
     pub address: Option<String>,
     pub timeout_secs: Option<u64>,
+    /// `[http]` table: connection limits and browser protections.
+    #[serde(default)]
+    pub http: HttpConfig,
+}
+
+/// ```toml
+/// [http]
+/// header_timeout_secs = 10    # CARMY_HTTP_HEADER_TIMEOUT_SECS
+/// body_timeout_secs = 30      # CARMY_HTTP_BODY_TIMEOUT_SECS
+/// max_connections = 4096      # CARMY_HTTP_MAX_CONNECTIONS
+/// security_headers = false    # CARMY_HTTP_SECURITY_HEADERS
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HttpConfig {
+    pub header_timeout_secs: Option<u64>,
+    pub body_timeout_secs: Option<u64>,
+    pub max_connections: Option<usize>,
+    pub security_headers: Option<bool>,
 }
 impl Config {
     /// Read `carmy.toml` from the working directory (or the file named by
@@ -46,11 +65,34 @@ impl Config {
         if let Some(address) = env("CARMY_ADDR") {
             config.address = Some(address);
         }
-        if let Some(seconds) = env("CARMY_TIMEOUT_SECS") {
-            let seconds = seconds
+        fn number<T: std::str::FromStr>(key: &str, value: String) -> Result<T, String> {
+            value
                 .parse()
-                .map_err(|_| format!("CARMY_TIMEOUT_SECS must be a number, got `{seconds}`"))?;
-            config.timeout_secs = Some(seconds);
+                .map_err(|_| format!("{key} must be a number, got `{value}`"))
+        }
+        if let Some(seconds) = env("CARMY_TIMEOUT_SECS") {
+            config.timeout_secs = Some(number("CARMY_TIMEOUT_SECS", seconds)?);
+        }
+        if let Some(seconds) = env("CARMY_HTTP_HEADER_TIMEOUT_SECS") {
+            config.http.header_timeout_secs =
+                Some(number("CARMY_HTTP_HEADER_TIMEOUT_SECS", seconds)?);
+        }
+        if let Some(seconds) = env("CARMY_HTTP_BODY_TIMEOUT_SECS") {
+            config.http.body_timeout_secs = Some(number("CARMY_HTTP_BODY_TIMEOUT_SECS", seconds)?);
+        }
+        if let Some(max) = env("CARMY_HTTP_MAX_CONNECTIONS") {
+            config.http.max_connections = Some(number("CARMY_HTTP_MAX_CONNECTIONS", max)?);
+        }
+        if let Some(enabled) = env("CARMY_HTTP_SECURITY_HEADERS") {
+            config.http.security_headers = Some(match enabled.as_str() {
+                "true" | "1" | "yes" => true,
+                "false" | "0" | "no" => false,
+                other => {
+                    return Err(format!(
+                        "CARMY_HTTP_SECURITY_HEADERS must be true or false, got `{other}`"
+                    ));
+                }
+            });
         }
         Ok(config)
     }
@@ -70,6 +112,22 @@ mod tests {
         assert_eq!(
             Config::from_sources(None, |_| None).unwrap(),
             Config::default()
+        );
+    }
+    #[test]
+    fn http_table_and_env_overrides() {
+        let file = "[http]\nheader_timeout_secs = 5\nsecurity_headers = true";
+        let env = |key: &str| (key == "CARMY_HTTP_MAX_CONNECTIONS").then(|| "64".to_string());
+        let config = Config::from_sources(Some(file), env).unwrap();
+        assert_eq!(config.http.header_timeout_secs, Some(5));
+        assert_eq!(config.http.security_headers, Some(true));
+        assert_eq!(config.http.max_connections, Some(64));
+        assert!(Config::from_sources(Some("[http]\nheader_timeout = 5"), |_| None).is_err());
+        let env = |key: &str| (key == "CARMY_HTTP_SECURITY_HEADERS").then(|| "maybe".to_string());
+        assert!(
+            Config::from_sources(None, env)
+                .unwrap_err()
+                .contains("true or false")
         );
     }
     #[test]

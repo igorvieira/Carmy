@@ -3,6 +3,8 @@
 //! Routes: `GET /.well-known/agent`, `GET /agent/tools`, `POST /agent/execute`
 //! (JSON, or Server-Sent Events with `Accept: text/event-stream`).
 //! Wire DTOs live here; runtime types never serialize directly onto the wire.
+//! [`ServerOptions`] holds the connection limits, timeouts and browser protections.
+mod hardening;
 use axum::{
     Extension, Json, Router,
     extract::{DefaultBodyLimit, FromRequestParts, State, rejection::JsonRejection},
@@ -16,6 +18,7 @@ use axum::{
 use carmy_core::*;
 use carmy_runtime::{Runtime, execution_request};
 use futures_util::StreamExt;
+pub use hardening::{Any, CorsLayer, ServerOptions, harden, serve_listener};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -305,6 +308,26 @@ pub async fn serve(
     address: impl tokio::net::ToSocketAddrs,
     server: impl Into<String>,
 ) -> std::io::Result<()> {
+    serve_with(runtime, address, server, &ServerOptions::default()).await
+}
+
+/// [`router`] plus the per-request protections in `options`.
+pub fn router_with(
+    runtime: Arc<Runtime>,
+    server: impl Into<String>,
+    options: &ServerOptions,
+) -> Router {
+    harden(router(runtime, server), options)
+}
+
+/// [`serve`] with explicit [`ServerOptions`]: timeouts, a connection limit, and the
+/// optional security headers and CORS.
+pub async fn serve_with(
+    runtime: Arc<Runtime>,
+    address: impl tokio::net::ToSocketAddrs,
+    server: impl Into<String>,
+    options: &ServerOptions,
+) -> std::io::Result<()> {
     let listener = tokio::net::TcpListener::bind(address).await?;
-    axum::serve(listener, router(runtime, server)).await
+    serve_listener(listener, router_with(runtime, server, options), options).await
 }
