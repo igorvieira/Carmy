@@ -5,11 +5,12 @@ const USAGE: &str = "\
 Carmy: agent-native execution infrastructure for Rust
 
 Usage:
-  carmy new <name> [--path <carmy-checkout>]   Create a new application
+  carmy new <name> [--git | --path <carmy-checkout>]   Create a new application
   carmy --version
 
 Options:
-  --path <dir>   Depend on a local Carmy checkout instead of the Git repository";
+  --git          Depend on the main branch of the Git repository instead of crates.io
+  --path <dir>   Depend on a local Carmy checkout instead of crates.io";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -19,7 +20,8 @@ fn main() -> ExitCode {
         .collect::<Vec<_>>()
         .as_slice()
     {
-        ["new", name] => new(name, Dependency::Git),
+        ["new", name] => new(name, Dependency::CratesIo),
+        ["new", name, "--git"] | ["new", "--git", name] => new(name, Dependency::Git),
         ["new", name, "--path", path] | ["new", "--path", path, name] => {
             new(name, Dependency::Path(PathBuf::from(path)))
         }

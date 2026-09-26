@@ -37,10 +37,12 @@ fn generates_conventional_layout() {
         !manifest.contains("{{"),
         "unrendered placeholder in {manifest}"
     );
-    let git = Dependency::Git;
-    let root = generate(&parent, "shop-git", &git).unwrap();
+    let root = generate(&parent, "shop-git", &Dependency::Git).unwrap();
     let manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap();
-    assert!(manifest.contains("git = \"https://github.com/igorvieira/carmy\""));
+    assert!(manifest.contains("git = \"https://github.com/igorvieira/Carmy\""));
+    let root = generate(&parent, "shop-crates", &Dependency::CratesIo).unwrap();
+    let manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    assert!(manifest.contains("carmy = \"0.1\""), "{manifest}");
 }
 
 #[test]

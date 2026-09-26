@@ -8,13 +8,16 @@ sidebar:
 ## `carmy`
 
 ```console
-cargo install --git https://github.com/igorvieira/Carmy carmy-cli
+cargo install carmy-cli
 ```
+
+Carmy requires Rust **1.88** or newer (`rustup update stable`).
 
 | command | effect |
 |---------|--------|
 | `carmy new <name>` | create an application with the [conventional layout](/getting-started/project-structure/) |
-| `carmy new <name> --path <dir>` | depend on a local Carmy checkout instead of the Git repository |
+| `carmy new <name> --git` | depend on the `main` branch of the Git repository instead of crates.io |
+| `carmy new <name> --path <dir>` | depend on a local Carmy checkout instead of crates.io |
 | `carmy --version` | print the version |
 | `carmy --help` | print usage |
 

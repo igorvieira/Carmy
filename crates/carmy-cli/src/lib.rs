@@ -7,7 +7,9 @@ use std::{
 /// Where the generated project gets the `carmy` crate from.
 #[derive(Debug, Clone)]
 pub enum Dependency {
-    /// The public repository (default until Carmy is published on crates.io).
+    /// The crates.io release matching this CLI's minor version (default).
+    CratesIo,
+    /// The `main` branch of the public repository.
     Git,
     /// A local checkout: the repository root or `crates/carmy`.
     Path(PathBuf),
@@ -15,7 +17,8 @@ pub enum Dependency {
 impl Dependency {
     fn toml(&self) -> io::Result<String> {
         match self {
-            Self::Git => Ok(r#"{ git = "https://github.com/igorvieira/carmy" }"#.into()),
+            Self::CratesIo => Ok(format!("{:?}", release_requirement())),
+            Self::Git => Ok(r#"{ git = "https://github.com/igorvieira/Carmy" }"#.into()),
             Self::Path(path) => {
                 let path = fs::canonicalize(path)?;
                 let facade = if path.join("crates/carmy/Cargo.toml").is_file() {
@@ -32,6 +35,14 @@ impl Dependency {
             }
         }
     }
+}
+
+/// `0.1` for CLI 0.1.x: compatible releases of the matching series.
+fn release_requirement() -> String {
+    let mut parts = env!("CARGO_PKG_VERSION").split('.');
+    let major = parts.next().unwrap_or("0");
+    let minor = parts.next().unwrap_or("0");
+    format!("{major}.{minor}")
 }
 
 #[derive(Debug)]

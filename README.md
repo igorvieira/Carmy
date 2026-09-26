@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/lockup-dark.png">
-    <img alt="Carmy: Composable Agent Runtime for Managed Yield" src="assets/brand/lockup.png" width="420">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/igorvieira/Carmy/main/assets/brand/lockup-dark.png">
+    <img alt="Carmy: Composable Agent Runtime for Managed Yield" src="https://raw.githubusercontent.com/igorvieira/Carmy/main/assets/brand/lockup.png" width="420">
   </picture>
 </p>
 
@@ -47,7 +47,7 @@ explicit:
 ## Getting started
 
 ```console
-$ cargo install --git https://github.com/igorvieira/carmy carmy-cli
+$ cargo install carmy-cli        # requires Rust 1.88+
 $ carmy new shop && cd shop
 $ cargo run              # HTTP on http://127.0.0.1:3000/.well-known/agent
 $ cargo run -- mcp       # the same app as an MCP server over stdio

@@ -57,5 +57,5 @@ carmy::app()
 | `observability` | yes | the tracing subscriber installed by `run()` |
 
 ```toml
-carmy = { git = "https://github.com/igorvieira/Carmy", default-features = false, features = ["http"] }
+carmy = { version = "0.1", default-features = false, features = ["http"] }
 ```
