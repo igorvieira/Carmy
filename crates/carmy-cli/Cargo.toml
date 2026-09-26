@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Command-line tool for Carmy applications"
+readme = "../../README.md"
+keywords = ["cli", "scaffolding", "agents", "mcp", "llm"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "carmy"

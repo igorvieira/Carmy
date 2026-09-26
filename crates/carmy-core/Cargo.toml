@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Agent-native execution infrastructure: core"
+readme = "../../README.md"
+keywords = ["agents", "llm", "tools", "idempotency", "mcp"]
+categories = ["asynchronous"]
 
 
 [dependencies]

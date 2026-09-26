@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Agent-native execution infrastructure: MCP adapter"
+readme = "../../README.md"
+keywords = ["mcp", "model-context", "agents", "llm", "tools"]
+categories = ["asynchronous", "network-programming"]
 
 
 [dependencies]

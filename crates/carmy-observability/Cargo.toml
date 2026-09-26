@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Agent-native execution infrastructure: tracing setup"
+readme = "../../README.md"
+keywords = ["tracing", "agents", "observability", "llm"]
+categories = ["development-tools::debugging"]
 
 
 [dependencies]
