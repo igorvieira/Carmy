@@ -160,6 +160,7 @@ Runnable examples in this repository:
 
 - `cargo run -p tool-server`: the conventional style, with `State`. Add `-- mcp` to serve it over MCP.
 - `cargo run -p hello-agent`: the explicit layer. It drives the runtime in-process, with no transport.
+- `cargo run -p curator`: the reference pipeline application: scheduled collection, one job per offer, publications that never duplicate, a Stripe webhook, readiness and the app's own routes. `-- worker` runs the jobs; `--features postgres` with `DATABASE_URL` makes everything durable.
 
 ## Tools
 

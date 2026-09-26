@@ -793,6 +793,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "curator"
+version = "0.3.0"
+dependencies = [
+ "axum",
+ "carmy",
+ "chrono",
+ "hex",
+ "hmac",
+ "http-body-util",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tower",
+]
+
+[[package]]
 name = "darling"
 version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -292,7 +292,12 @@ impl Carmy {
     }
     /// The HTTP router, with the per-request protections from [`Carmy::http`].
     #[cfg(feature = "http")]
-    pub fn router(mut self) -> Result<axum::Router, Error> {
+    pub fn router(self) -> Result<axum::Router, Error> {
+        self.router_and_jobs().map(|(router, _)| router)
+    }
+    /// [`Carmy::router`] plus the job queue behind it, for tests and custom workers.
+    #[cfg(feature = "http")]
+    pub fn router_and_jobs(mut self) -> Result<(axum::Router, carmy_jobs::Jobs), Error> {
         let (name, options) = (self.name.clone(), self.http.clone());
         let webhooks = std::mem::take(&mut self.webhooks);
         let mut readiness = std::mem::take(&mut self.readiness);
@@ -325,13 +330,13 @@ impl Carmy {
             router = router.merge(own);
         }
         if !webhooks.is_empty() {
-            let queue: Arc<dyn carmy_http::Enqueue> = Arc::new(JobQueue(jobs));
+            let queue: Arc<dyn carmy_http::Enqueue> = Arc::new(JobQueue(jobs.clone()));
             router = router.merge(
                 carmy_http::webhook_router(runtime, webhooks, Some(queue))
                     .map_err(Error::Registration)?,
             );
         }
-        Ok(carmy_http::harden(router, &options))
+        Ok((carmy_http::harden(router, &options), jobs))
     }
     #[cfg(feature = "http")]
     pub async fn listen(self, address: impl tokio::net::ToSocketAddrs) -> Result<(), Error> {
