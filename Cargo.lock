@@ -221,11 +221,14 @@ dependencies = [
  "criterion",
  "futures-util",
  "http-body-util",
+ "jsonschema",
  "schemars",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-util",
  "tower",
+ "uuid",
 ]
 
 [[package]]
