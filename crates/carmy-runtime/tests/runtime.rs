@@ -317,3 +317,36 @@ async fn deadline_applies_once_a_tool_suspends() {
     assert_eq!(result.outcome.unwrap_err().code, "TIMEOUT");
     assert!(started.elapsed() < Duration::from_secs(1));
 }
+#[tokio::test]
+async fn rate_limits_per_principal_with_retry_after() {
+    let rt = Runtime::new()
+        .policy(RateLimit::new(2, Duration::from_millis(300)))
+        .tool(Echo(Effect::Read))
+        .unwrap();
+    let as_user = |name: &str| {
+        let mut req = request(json!("x"));
+        req.context.principal = Some(name.into());
+        req
+    };
+    assert!(rt.execute(as_user("ada")).await.outcome.is_ok());
+    assert!(rt.execute(as_user("ada")).await.outcome.is_ok());
+    let denied = rt.execute(as_user("ada")).await.outcome.unwrap_err();
+    assert_eq!(denied.code, "RATE_LIMITED");
+    assert_eq!(denied.category, ErrorCategory::Capacity);
+    assert!(denied.retryable && denied.retry_after.is_some());
+    // Another principal has its own window; anonymous callers share one.
+    assert!(rt.execute(as_user("bob")).await.outcome.is_ok());
+    assert!(rt.execute(request(json!("x"))).await.outcome.is_ok());
+    assert!(rt.execute(request(json!("x"))).await.outcome.is_ok());
+    assert_eq!(
+        rt.execute(request(json!("x")))
+            .await
+            .outcome
+            .unwrap_err()
+            .code,
+        "RATE_LIMITED"
+    );
+    // The window passes and the principal is allowed again.
+    tokio::time::sleep(Duration::from_millis(350)).await;
+    assert!(rt.execute(as_user("ada")).await.outcome.is_ok());
+}

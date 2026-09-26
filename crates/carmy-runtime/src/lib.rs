@@ -5,7 +5,12 @@ use futures_util::{FutureExt, Stream};
 pub use idempotency::*;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+};
 use std::{
     panic::AssertUnwindSafe,
     task::{Context, Poll},
@@ -81,6 +86,53 @@ impl ExecutionPolicy for RequireToolPermission {
                 ErrorCategory::Permission,
             ))
         }
+    }
+}
+/// Fixed-window rate limiting per principal (or per session, then "anonymous"), as an
+/// [`ExecutionPolicy`]. Rejections are `RATE_LIMITED`, retryable, with `retry_after`.
+/// Process-local; put a shared limiter in front for multi-instance deployments.
+pub struct RateLimit {
+    max: u32,
+    window: Duration,
+    windows: std::sync::Mutex<HashMap<String, (Instant, u32)>>,
+}
+impl RateLimit {
+    /// Allow `max` executions per `window` for each principal.
+    pub fn new(max: u32, window: Duration) -> Self {
+        Self {
+            max: max.max(1),
+            window,
+            windows: std::sync::Mutex::new(HashMap::new()),
+        }
+    }
+    fn key(ctx: &AgentContext) -> String {
+        ctx.principal
+            .clone()
+            .or_else(|| ctx.session.clone())
+            .unwrap_or_else(|| "anonymous".into())
+    }
+}
+impl ExecutionPolicy for RateLimit {
+    fn check(&self, ctx: &AgentContext, _: &ToolMetadata) -> AgentResult<()> {
+        let now = Instant::now();
+        let mut windows = self.windows.lock().unwrap_or_else(|e| e.into_inner());
+        // Drop windows that ended, so idle principals don't accumulate.
+        windows.retain(|_, (started, _)| now.duration_since(*started) < self.window);
+        let (started, count) = windows.entry(Self::key(ctx)).or_insert((now, 0));
+        if *count >= self.max {
+            let remaining = self.window.saturating_sub(now.duration_since(*started));
+            return Err(AgentError::new(
+                "RATE_LIMITED",
+                format!(
+                    "Limit of {} executions per {:?} reached",
+                    self.max, self.window
+                ),
+                ErrorCategory::Capacity,
+            )
+            .retryable(Some(remaining.as_secs().max(1))));
+        }
+        *count += 1;
+        Ok(())
     }
 }
 pub struct Runtime {
