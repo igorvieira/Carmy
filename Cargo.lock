@@ -2029,8 +2029,11 @@ name = "tool-server"
 version = "0.1.0"
 dependencies = [
  "carmy",
+ "futures-util",
+ "rmcp",
  "schemars",
  "serde",
+ "serde_json",
  "tokio",
 ]
 

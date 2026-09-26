@@ -60,12 +60,38 @@ impl McpServer {
     }
     /// Serve a single client over stdin/stdout until it disconnects.
     pub async fn serve_stdio(self) -> std::io::Result<()> {
-        let running = self
-            .serve(rmcp::transport::stdio())
-            .await
-            .map_err(std::io::Error::other)?;
+        let running = match stdio::pipes() {
+            Some(pipes) => self.serve(pipes).await,
+            None => self.serve(rmcp::transport::stdio()).await,
+        }
+        .map_err(std::io::Error::other)?;
         running.waiting().await.map_err(std::io::Error::other)?;
         Ok(())
+    }
+}
+
+/// Non-blocking stdio. `tokio::io::stdin`/`stdout` run every read and write on the
+/// blocking thread pool; when stdin and stdout are pipes (how MCP clients launch
+/// servers), readiness-driven pipes avoid that per-message thread hand-off.
+mod stdio {
+    #[cfg(unix)]
+    pub fn pipes() -> Option<(
+        tokio::net::unix::pipe::Receiver,
+        tokio::net::unix::pipe::Sender,
+    )> {
+        use std::os::fd::AsFd;
+        use tokio::net::unix::pipe;
+        // Duplicated descriptors: dropping them never closes the process's own stdio.
+        let stdin = std::io::stdin().as_fd().try_clone_to_owned().ok()?;
+        let stdout = std::io::stdout().as_fd().try_clone_to_owned().ok()?;
+        // Fails, and falls back to blocking stdio, unless both are FIFOs.
+        let receiver = pipe::Receiver::from_owned_fd(stdin).ok()?;
+        let sender = pipe::Sender::from_owned_fd(stdout).ok()?;
+        Some((receiver, sender))
+    }
+    #[cfg(not(unix))]
+    pub fn pipes() -> Option<(tokio::io::Stdin, tokio::io::Stdout)> {
+        None
     }
 }
 fn tool(m: &ToolMetadata) -> McpTool {
