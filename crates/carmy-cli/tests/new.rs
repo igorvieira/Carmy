@@ -1,4 +1,6 @@
-use carmy_cli::{Dependency, NewError, generate, validate_name};
+use carmy_cli::{
+    Dependency, Error, find_project, generate, generate_tool, validate_name, validate_tool_name,
+};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -51,7 +53,7 @@ fn never_overwrites_and_validates_names() {
     generate(&parent, "shop", &Dependency::Git).unwrap();
     assert!(matches!(
         generate(&parent, "shop", &Dependency::Git),
-        Err(NewError::Exists(_))
+        Err(Error::Exists(_))
     ));
     for bad in ["Shop", "1shop", "shop!", "carmy", "my shop", ""] {
         assert!(validate_name(bad).is_err(), "{bad} should be rejected");
@@ -68,6 +70,20 @@ fn never_overwrites_and_validates_names() {
 fn generated_project_passes_its_tests() {
     let parent = scratch("build");
     let root = generate(&parent, "shop", &Dependency::Path(workspace())).unwrap();
+    for (name, effect) in [
+        ("search_products", "read"),
+        ("create_order", "write"),
+        ("delete_customer", "destructive"),
+    ] {
+        generate_tool(&root, name, effect, "A \"generated\" tool").unwrap();
+    }
+    // Generated code must already be formatted, so `cargo fmt --check` passes from day one.
+    let fmt = Command::new(env!("CARGO"))
+        .args(["fmt", "--check"])
+        .current_dir(&root)
+        .status()
+        .unwrap();
+    assert!(fmt.success(), "generated code is not rustfmt-clean");
     let status = Command::new(env!("CARGO"))
         .arg("test")
         .current_dir(&root)
@@ -75,4 +91,73 @@ fn generated_project_passes_its_tests() {
         .status()
         .unwrap();
     assert!(status.success());
+}
+
+#[test]
+fn generates_tools_into_the_project() {
+    let parent = scratch("tool");
+    let root = generate(&parent, "shop", &Dependency::Git).unwrap();
+    let file = generate_tool(&root, "create_order", "write", "Place an order").unwrap();
+    assert_eq!(file, root.join("src/tools/create_order.rs"));
+    let code = fs::read_to_string(&file).unwrap();
+    assert!(code.contains("struct CreateOrderInput"));
+    assert!(code.contains("effect = \"write\""));
+    assert!(code.contains("description = \"Place an order\""));
+    assert!(code.contains("async fn create_order(input: CreateOrderInput)"));
+    let modules = fs::read_to_string(root.join("src/tools/mod.rs")).unwrap();
+    assert!(
+        modules.contains("mod create_order;\nmod hello;\n"),
+        "{modules}"
+    );
+
+    let destructive = generate_tool(&root, "delete_customer", "destructive", "Delete").unwrap();
+    let code = fs::read_to_string(destructive).unwrap();
+    assert!(code.contains("confirmation = \"required\""));
+    assert!(code.contains("CONFIRMATION_REQUIRED"));
+    let read = generate_tool(&root, "search", "read", "Search").unwrap();
+    let code = fs::read_to_string(read).unwrap();
+    assert!(code.contains("idempotent = true") && code.contains("parallel_safe = true"));
+}
+
+#[test]
+fn tool_generation_is_guarded() {
+    let parent = scratch("tool-guards");
+    let root = generate(&parent, "shop", &Dependency::Git).unwrap();
+    assert!(matches!(
+        generate_tool(&root, "hello", "read", "again"),
+        Err(Error::Exists(_))
+    ));
+    assert!(matches!(
+        generate_tool(&root, "search", "sideways", "x"),
+        Err(Error::InvalidEffect(_))
+    ));
+    for bad in ["Search", "search-products", "1search", "fn", "tests", ""] {
+        assert!(validate_tool_name(bad).is_err(), "{bad} should be rejected");
+    }
+    assert!(matches!(find_project(&parent), Err(Error::NotAProject(_))));
+    assert_eq!(find_project(&root.join("src/tools")).unwrap(), root);
+}
+
+#[test]
+fn cli_generates_from_a_subdirectory() {
+    let parent = scratch("tool-cli");
+    let root = generate(&parent, "shop", &Dependency::Git).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_carmy"))
+        .args(["g", "tool", "ping", "--effect", "none"])
+        .current_dir(root.join("src"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(root.join("src/tools/ping.rs").is_file());
+    let missing_effect = Command::new(env!("CARGO_BIN_EXE_carmy"))
+        .args(["g", "tool", "pong"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(!missing_effect.status.success());
+    assert!(String::from_utf8_lossy(&missing_effect.stderr).contains("--effect"));
 }

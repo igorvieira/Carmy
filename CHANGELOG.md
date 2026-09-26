@@ -4,6 +4,15 @@ All notable changes to Carmy are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/). APIs are unstable during 0.x.
 
+## [Unreleased]
+
+### Added
+
+- `carmy generate tool <name> --effect <effect>` (and `carmy g tool`) writes
+  `src/tools/<name>.rs` and declares it in `src/tools/mod.rs`. The file has typed input
+  and output, the `#[carmy::tool]` function and a test, with attributes that follow the
+  effect. It never overwrites a file and runs from any directory inside the application.
+
 ## [0.2.0] - 2026-09-26
 
 ### Performance

@@ -19,10 +19,12 @@ cargo test
 
 ## Adding a tool
 
-1. Create `src/tools/search.rs` with an `#[carmy::tool]` function.
-2. Add `mod search;` to `src/tools/mod.rs`.
+```console
+carmy g tool search --effect read --description "Search the catalog"
+```
 
-That's it: the tool is discovered over HTTP and MCP.
+This creates `src/tools/search.rs`, with a test, and declares it in `src/tools/mod.rs`.
+The tool registers itself and is discovered over HTTP and MCP.
 
 ```sh
 curl localhost:3000/agent/tools

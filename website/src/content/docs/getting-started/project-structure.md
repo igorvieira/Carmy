@@ -50,7 +50,14 @@ async fn main() -> carmy::Result {
 
 ## `src/tools/`
 
-The convention is one file per tool. Declare each file in `src/tools/mod.rs`:
+The convention is one file per tool, declared in `src/tools/mod.rs`. The generator does
+both for you:
+
+```console
+carmy g tool search --effect read --description "Search the catalog"
+```
+
+The result looks like this:
 
 ```rust
 //! One file per tool. Declare each file here; `#[carmy::tool]` registers it.

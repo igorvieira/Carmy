@@ -1,8 +1,10 @@
-//! Project generator behind `carmy new`.
+//! Generators behind `carmy new` and `carmy generate tool`.
+mod tool;
 use std::{
     fmt, fs, io,
     path::{Path, PathBuf},
 };
+pub use tool::{find_project, generate_tool, validate_tool_name};
 
 /// Where the generated project gets the `carmy` crate from.
 #[derive(Debug, Clone)]
@@ -46,30 +48,43 @@ fn release_requirement() -> String {
 }
 
 #[derive(Debug)]
-pub enum NewError {
+pub enum Error {
     InvalidName(String),
+    InvalidEffect(String),
     Exists(PathBuf),
+    NotAProject(PathBuf),
     Io(io::Error),
 }
-impl fmt::Display for NewError {
+/// The former name of [`Error`].
+pub type NewError = Error;
+impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidName(reason) => write!(f, "invalid application name: {reason}"),
+            Self::InvalidName(reason) => write!(f, "invalid name: {reason}"),
+            Self::InvalidEffect(effect) => write!(
+                f,
+                "invalid effect `{effect}`; use none, read, write, external_write or destructive"
+            ),
             Self::Exists(path) => write!(f, "{} already exists; not overwriting", path.display()),
+            Self::NotAProject(dir) => write!(
+                f,
+                "{} is not inside a Carmy application (no src/tools/mod.rs found); run `carmy new` first",
+                dir.display()
+            ),
             Self::Io(e) => write!(f, "{e}"),
         }
     }
 }
-impl std::error::Error for NewError {}
-impl From<io::Error> for NewError {
+impl std::error::Error for Error {}
+impl From<io::Error> for Error {
     fn from(e: io::Error) -> Self {
         Self::Io(e)
     }
 }
 
 /// A package name Cargo accepts and that does not shadow Carmy or the standard library.
-pub fn validate_name(name: &str) -> Result<(), NewError> {
-    let invalid = |reason: &str| Err(NewError::InvalidName(format!("`{name}` {reason}")));
+pub fn validate_name(name: &str) -> Result<(), Error> {
+    let invalid = |reason: &str| Err(Error::InvalidName(format!("`{name}` {reason}")));
     if !name.starts_with(|c: char| c.is_ascii_lowercase()) {
         return invalid("must start with a lowercase ASCII letter");
     }
@@ -105,11 +120,11 @@ const FILES: &[(&str, &str)] = &[
 ];
 
 /// Create `<parent>/<name>` with the conventional layout. Returns the project directory.
-pub fn generate(parent: &Path, name: &str, carmy: &Dependency) -> Result<PathBuf, NewError> {
+pub fn generate(parent: &Path, name: &str, carmy: &Dependency) -> Result<PathBuf, Error> {
     validate_name(name)?;
     let root = parent.join(name);
     if root.exists() {
-        return Err(NewError::Exists(root));
+        return Err(Error::Exists(root));
     }
     let dependency = carmy.toml()?;
     for (path, template) in FILES {

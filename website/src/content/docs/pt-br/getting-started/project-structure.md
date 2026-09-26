@@ -50,7 +50,14 @@ async fn main() -> carmy::Result {
 
 ## `src/tools/`
 
-A convenção é um arquivo por tool. Declare cada arquivo em `src/tools/mod.rs`:
+A convenção é um arquivo por tool, declarado em `src/tools/mod.rs`. O gerador faz as
+duas coisas por você:
+
+```console
+carmy g tool search --effect read --description "Search the catalog"
+```
+
+O resultado fica assim:
 
 ```rust
 //! Um arquivo por tool. Declare cada arquivo aqui; `#[carmy::tool]` o registra.

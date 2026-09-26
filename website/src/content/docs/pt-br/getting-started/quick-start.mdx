@@ -67,7 +67,14 @@ import { Steps, Aside } from '@astrojs/starlight/components';
 
 ## Sua primeira tool
 
-Crie `src/tools/search.rs`:
+Gere a tool:
+
+```console
+carmy g tool search --effect read --description "Search the catalog"
+```
+
+Isso cria `src/tools/search.rs`, com um teste, e o declara em `src/tools/mod.rs`. Depois
+dê a ela a forma da sua tool:
 
 ```rust
 use carmy::prelude::*;
@@ -91,7 +98,7 @@ async fn search(input: SearchInput) -> AgentResult<SearchOutput> {
 }
 ```
 
-Depois adicione `mod search;` em `src/tools/mod.rs`. Só isso: a tool se registra sozinha e
-fica disponível via HTTP e MCP.
+Só isso: a tool se registra sozinha e fica disponível via HTTP e MCP. Sem o gerador,
+crie o arquivo e adicione `mod search;` em `src/tools/mod.rs` você mesmo.
 
 Próximo: [Estrutura do projeto](/pt-br/getting-started/project-structure/).
