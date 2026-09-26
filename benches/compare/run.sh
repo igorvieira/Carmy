@@ -16,7 +16,7 @@ OUT=results/$(date -u +%Y-%m-%d).jsonl
 : > "$OUT"
 ARGS=(${COMPARE_ARGS:-})
 
-mcp() { $T/driver mcp --name "$1" ${ARGS[@]+"${ARGS[@]}"} -- "${@:2}" | tee -a "$OUT"; }
+mcp() { $T/driver mcp --name "$1" --env RUST_LOG=warn ${ARGS[@]+"${ARGS[@]}"} -- "${@:2}" | tee -a "$OUT"; }
 http() {
   local name=$1 port=$2; shift 2
   $T/driver http --name "$name" --url "$URL:$port/agent/execute" --env "CARMY_ADDR=127.0.0.1:$port" \
