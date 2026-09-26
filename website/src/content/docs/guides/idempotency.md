@@ -53,7 +53,8 @@ The default `InMemoryIdempotencyStore` is process-local and bounded (10,000 entr
 it is full, new requests fail closed with `IDEMPOTENCY_CAPACITY`. It never evicts entries
 that may represent committed effects.
 
-For durable or multi-instance deployments, implement `IdempotencyStore`:
+For durable or multi-instance deployments, use `carmy::postgres::PostgresIdempotencyStore`
+(see [Postgres](/guides/postgres/)), or implement `IdempotencyStore`:
 
 ```rust
 use carmy::runtime::{IdempotencyKey, IdempotencyStore, Reservation, StoreFuture};

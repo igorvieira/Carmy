@@ -366,3 +366,78 @@ async fn an_unbound_queue_enqueues_but_cannot_run() {
     jobs.enqueue(request("work", "x")).await.unwrap();
     assert_eq!(jobs.run_due(10).await.unwrap_err().code, "JOBS_UNBOUND");
 }
+
+#[tokio::test]
+async fn purge_drops_old_finished_jobs_and_keeps_the_rest() {
+    let h = harness(|s| s, RetryPolicy::default());
+    let done = h.jobs.enqueue(request("work", "done")).await.unwrap();
+    h.jobs.run_due(10).await.unwrap();
+    let cancelled = h.jobs.enqueue(request("work", "cancel")).await.unwrap();
+    h.jobs.cancel(&cancelled).await.unwrap();
+    // A dead letter and a queued job must survive any purge.
+    let dead = h.jobs.enqueue(request("work", "dead")).await.unwrap();
+    h.store
+        .claim(h.jobs.now(), Duration::from_secs(10), 1)
+        .await
+        .unwrap();
+    h.store
+        .finish(
+            &dead,
+            carmy_jobs::JobOutcome::DeadLettered(AgentError::new(
+                "X",
+                "gave up",
+                ErrorCategory::Internal,
+            )),
+        )
+        .await
+        .unwrap();
+    let later = h
+        .jobs
+        .enqueue_after(
+            request("work", "later"),
+            Duration::from_secs(3600 * 24 * 60),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        h.jobs.purge(Duration::from_secs(3600)).await.unwrap(),
+        0,
+        "too recent"
+    );
+    h.clock.advance(Duration::from_secs(2 * 3600));
+    assert_eq!(h.jobs.purge(Duration::from_secs(3600)).await.unwrap(), 2);
+    assert!(h.jobs.get(&done).await.unwrap().is_none());
+    assert!(h.jobs.get(&cancelled).await.unwrap().is_none());
+    assert!(h.jobs.get(&dead).await.unwrap().is_some());
+    assert!(h.jobs.get(&later).await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn a_full_in_memory_store_makes_room_from_finished_jobs() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let runtime = Arc::new(
+        Runtime::new()
+            .tool(Scripted {
+                name: "work",
+                idempotent: false,
+                calls: calls.clone(),
+                log: Arc::new(Mutex::new(Vec::new())),
+                fail_times: 0,
+                delay: Duration::ZERO,
+                panics: false,
+                fatal: false,
+            })
+            .unwrap(),
+    );
+    let jobs = Jobs::new(runtime, Arc::new(InMemoryJobStore::new(2)));
+    jobs.enqueue(request("work", "a")).await.unwrap();
+    jobs.enqueue(request("work", "b")).await.unwrap();
+    assert_eq!(
+        jobs.enqueue(request("work", "c")).await.unwrap_err().code,
+        "JOBS_CAPACITY",
+        "queued jobs are never dropped"
+    );
+    jobs.run_due(10).await.unwrap();
+    jobs.enqueue(request("work", "c")).await.unwrap();
+}

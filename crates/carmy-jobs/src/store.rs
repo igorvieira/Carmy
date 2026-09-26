@@ -16,6 +16,8 @@ pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = AgentResult<T>> + Send
 /// - `claim` atomically marks up to `limit` due jobs `Running`, counts an attempt and
 ///   sets a lease; a `Running` job whose lease expired counts as due (its worker died);
 /// - `finish` records the outcome; retries go back to `Queued` at the given time.
+///
+/// `extend_lease` and `purge` have defaults, so existing stores keep compiling.
 pub trait JobStore: Send + Sync {
     fn enqueue<'a>(&'a self, job: Job) -> StoreFuture<'a, JobId>;
     fn claim<'a>(
@@ -29,9 +31,37 @@ pub trait JobStore: Send + Sync {
     fn cancel<'a>(&'a self, id: &'a JobId) -> StoreFuture<'a, bool>;
     fn get<'a>(&'a self, id: &'a JobId) -> StoreFuture<'a, Option<Job>>;
     fn dead_letters<'a>(&'a self, limit: usize) -> StoreFuture<'a, Vec<Job>>;
+    /// Keep a running job owned for `lease` more. Stores with a shared clock (a
+    /// database) override this, so workers on skewed machines agree on when a lease
+    /// ends. The default extends it from the worker's `now`.
+    fn extend_lease<'a>(
+        &'a self,
+        id: &'a JobId,
+        now: DateTime<Utc>,
+        lease: Duration,
+    ) -> StoreFuture<'a, ()> {
+        let until = now + chrono::Duration::from_std(lease).expect("a bounded lease");
+        self.heartbeat(id, until)
+    }
+    /// Delete jobs that finished (succeeded, failed, cancelled) before `before` and
+    /// return how many. Dead letters stay: they wait for a decision. The default keeps
+    /// everything.
+    fn purge<'a>(&'a self, before: DateTime<Utc>) -> StoreFuture<'a, u64> {
+        let _ = before;
+        Box::pin(async { Ok(0) })
+    }
 }
 
-/// Process-local store for development and tests. Bounded; fails closed when full.
+/// Finished for good, and not waiting for anyone.
+fn purgeable(status: JobStatus) -> bool {
+    matches!(
+        status,
+        JobStatus::Succeeded | JobStatus::Failed | JobStatus::Cancelled
+    )
+}
+
+/// Process-local store for development and tests. Bounded: when full, it first drops
+/// finished jobs (never queued, running or dead-lettered ones), then fails closed.
 pub struct InMemoryJobStore {
     jobs: Mutex<HashMap<String, Job>>,
     capacity: usize,
@@ -62,6 +92,9 @@ impl JobStore for InMemoryJobStore {
                 })
             {
                 return Ok(existing.id.clone());
+            }
+            if jobs.len() >= self.capacity {
+                jobs.retain(|_, j| !purgeable(j.status));
             }
             if jobs.len() >= self.capacity {
                 return Err(AgentError::new(
@@ -163,6 +196,16 @@ impl JobStore for InMemoryJobStore {
 
     fn get<'a>(&'a self, id: &'a JobId) -> StoreFuture<'a, Option<Job>> {
         Box::pin(async move { Ok(self.jobs.lock().await.get(&id.0).cloned()) })
+    }
+
+    fn purge<'a>(&'a self, before: DateTime<Utc>) -> StoreFuture<'a, u64> {
+        Box::pin(async move {
+            let mut jobs = self.jobs.lock().await;
+            let count = jobs.len();
+            // A finished job's `run_at` is when its last attempt was due.
+            jobs.retain(|_, j| !(purgeable(j.status) && j.run_at < before));
+            Ok((count - jobs.len()) as u64)
+        })
     }
 
     fn dead_letters<'a>(&'a self, limit: usize) -> StoreFuture<'a, Vec<Job>> {

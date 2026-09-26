@@ -51,6 +51,9 @@ audit 20            -> os últimos registros, mais novos primeiro
 dead                -> os jobs na fila de dead letters
 ```
 
+O `carmy::postgres::cleanup` apaga os registros de auditoria além da retenção (90 dias
+por padrão); veja [Postgres](/pt-br/guides/postgres/#retenção).
+
 `PostgresAudit::recent(limit)` e `InMemoryAudit::recent(limit)` devolvem os mesmos
 registros em código. Uma execução com replay tem `replayed: true` e o `execution_id`
 **original**, então um webhook reentregue aparece como dois registros apontando para uma

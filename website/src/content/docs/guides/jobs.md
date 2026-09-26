@@ -105,10 +105,12 @@ carmy::postgres::migrate(&pool).await?;
 carmy::app().jobs(Arc::new(PostgresJobStore::new(pool.clone())))
 ```
 
-Workers claim with `FOR UPDATE SKIP LOCKED`, so any number of them share a queue. The
-store also offers a **transactional outbox**: `store.enqueue_in(&mut tx, request, run_at,
-max_attempts)` inserts the job inside your transaction, so the job exists exactly when
-the write it follows commits.
+Workers claim with `FOR UPDATE SKIP LOCKED`, so any number of them share a queue, and
+leases follow the database clock. The store also offers a **transactional outbox**. See
+[Postgres](/guides/postgres/).
 
-Any `JobStore` implementation works; the trait has seven methods and a contract test
-suite you can run against your own.
+Finished jobs stay until you delete them: `jobs.purge(older_than)` removes those that
+succeeded, failed or were cancelled, never dead letters. When the in-memory store is
+full, it drops finished jobs before refusing new ones.
+
+Any `JobStore` implementation works; the trait has seven required methods.

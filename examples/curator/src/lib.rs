@@ -561,7 +561,8 @@ pub fn app_with(settings: Settings, store: Arc<Store>, publishers: Arc<Publisher
 #[cfg(feature = "postgres")]
 fn with_database(app: Carmy) -> Carmy {
     use carmy::postgres::{
-        PostgresAudit, PostgresIdempotencyStore, PostgresJobStore, connect, migrate,
+        PostgresAudit, PostgresIdempotencyStore, PostgresJobStore, Retention, cleanup, connect,
+        migrate,
     };
     let Ok(url) = std::env::var("DATABASE_URL") else {
         return app;
@@ -573,11 +574,30 @@ fn with_database(app: Carmy) -> Carmy {
             pool
         })
     });
+    let for_cleanup = pool.clone();
     app.jobs(Arc::new(PostgresJobStore::new(pool.clone())))
         .idempotency_store(Arc::new(PostgresIdempotencyStore::new(pool.clone())))
         .sink(Arc::new(PostgresAudit::new(pool.clone())))
         .ready("database", move || carmy::postgres::ready(pool.clone()))
+        // Migrations already ran above; the command exists for deploy scripts.
         .command("migrate", |_| Box::pin(async { Ok(()) }))
+        // Run it from cron, a Kubernetes CronJob or any scheduler.
+        .command("cleanup", move |_| {
+            Box::pin(async move {
+                let cleaned = cleanup(&for_cleanup, Retention::default())
+                    .await
+                    .map_err(|e| carmy::Error::Io(std::io::Error::other(e.to_string())))?;
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "jobs": cleaned.jobs,
+                        "idempotency": cleaned.idempotency,
+                        "audit": cleaned.audit,
+                    })
+                );
+                Ok(())
+            })
+        })
 }
 
 #[cfg(not(feature = "postgres"))]

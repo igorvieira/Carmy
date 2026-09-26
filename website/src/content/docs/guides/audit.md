@@ -51,6 +51,9 @@ audit 20            -> the latest records, newest first
 dead                -> jobs in the dead-letter queue
 ```
 
+`carmy::postgres::cleanup` deletes audit records past their retention (90 days by
+default); see [Postgres](/guides/postgres/#retention).
+
 `PostgresAudit::recent(limit)` and `InMemoryAudit::recent(limit)` return the same
 records in code. A replayed execution has `replayed: true` and the **original**
 `execution_id`, so a redelivered webhook shows up as two records pointing at one

@@ -6,6 +6,7 @@
 //! cargo run -p curator -- worker        # runs the jobs and the schedules
 //! cargo run -p curator -- console       # try the tools; `audit`, `dead`
 //! DATABASE_URL=postgres://.. cargo run -p curator --features postgres -- migrate
+//! DATABASE_URL=postgres://.. cargo run -p curator --features postgres -- cleanup
 //! ```
 #[tokio::main]
 async fn main() -> carmy::Result {

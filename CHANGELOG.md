@@ -6,6 +6,28 @@ All notable changes to Carmy are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **`carmy_postgres::migrate` no longer shares `_sqlx_migrations` with the
+  application.** Carmy tracks its versions in `carmy_schema_version`, so an app with its
+  own sqlx migrations no longer collides with Carmy's. Instances migrating at once take
+  turns on an advisory lock, and `migrate` can run inside `tokio::spawn`. Databases set
+  up by 0.4.0 upgrade in place.
+- **Leases use the database clock.** `PostgresJobStore` sets and checks leases with
+  `now()` on the database, so workers with skewed clocks never take a live job. The new
+  `JobStore::extend_lease` (with a default) lets any store do the same.
+- **The in-memory job store no longer fills up with finished jobs.** When full, it drops
+  finished jobs before refusing new ones; queued, running and dead-lettered jobs are
+  never dropped.
+
+### Added
+
+- **Retention.** `carmy_postgres::cleanup(pool, Retention)` deletes, in batches, finished
+  jobs (30 days), completed idempotency records (7 days) and audit records (90 days);
+  dead letters and in-progress records always stay. `Jobs::purge(older_than)` and
+  `JobStore::purge` do the job part for any store. The curator has a `cleanup` command.
+- A Postgres guide, in English and Portuguese.
+
 ## [0.4.0] - 2026-09-26
 
 ### Added

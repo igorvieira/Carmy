@@ -2,7 +2,10 @@
 //! otherwise; CI provides a database. Tests share the tables, so they run one at a time.
 use carmy_core::*;
 use carmy_jobs::{JobOutcome, JobStatus, JobStore, Jobs, ManualClock, RetryPolicy};
-use carmy_postgres::{PostgresAudit, PostgresIdempotencyStore, PostgresJobStore, connect, migrate};
+use carmy_postgres::{
+    Cleaned, PostgresAudit, PostgresIdempotencyStore, PostgresJobStore, Retention, cleanup,
+    connect, migrate,
+};
 use carmy_runtime::{IdempotencyKey, IdempotencyStore, Reservation, Runtime, execution_request};
 use chrono::{TimeZone, Utc};
 use serde_json::json;
@@ -112,40 +115,58 @@ async fn jobs_enqueue_claim_and_finish() {
     );
 }
 
+/// Simulates a worker whose lease ran out, on the database clock.
+async fn expire_lease(pool: &PgPool, id: &carmy_jobs::JobId) {
+    sqlx::query("UPDATE carmy_jobs SET lease_until = now() - interval '1 second' WHERE id = $1")
+        .bind(&id.0)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
-async fn expired_leases_are_reclaimed_and_dead_letters_listed() {
+async fn leases_follow_the_database_clock() {
     let Some((pool, _guard)) = database().await else {
         return;
     };
     let store = PostgresJobStore::new(pool.clone());
-    let now = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+    let now = Utc::now();
     let id = store
         .enqueue(Jobs::prepare(request("a"), now, 3))
         .await
         .unwrap();
-    let first = store.claim(now, Duration::from_secs(10), 1).await.unwrap();
+    let first = store.claim(now, Duration::from_secs(30), 1).await.unwrap();
     assert_eq!(first[0].attempts, 1);
-    // The worker died: after the lease, another claim gets the job as attempt 2.
-    let later = now + chrono::Duration::seconds(11);
-    let second = store
-        .claim(later, Duration::from_secs(10), 1)
-        .await
-        .unwrap();
+    // A worker whose clock runs an hour ahead still sees a live lease.
+    let skewed = now + chrono::Duration::hours(1);
+    assert!(
+        store
+            .claim(skewed, Duration::from_secs(30), 1)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // The worker died: once the lease is over, another claim gets attempt 2.
+    expire_lease(&pool, &id).await;
+    let second = store.claim(now, Duration::from_secs(30), 1).await.unwrap();
     assert_eq!(second.len(), 1);
     assert_eq!(second[0].id, id);
     assert_eq!(second[0].attempts, 2);
-    // A heartbeat extends the lease, so it is not reclaimed.
+
+    // Extending the lease keeps it owned, whatever the worker's clock says.
+    expire_lease(&pool, &id).await;
     store
-        .heartbeat(&id, later + chrono::Duration::seconds(60))
+        .extend_lease(
+            &id,
+            now - chrono::Duration::hours(5),
+            Duration::from_secs(60),
+        )
         .await
         .unwrap();
     assert!(
         store
-            .claim(
-                later + chrono::Duration::seconds(30),
-                Duration::from_secs(10),
-                1
-            )
+            .claim(now, Duration::from_secs(30), 1)
             .await
             .unwrap()
             .is_empty()
@@ -159,6 +180,189 @@ async fn expired_leases_are_reclaimed_and_dead_letters_listed() {
     let dead = store.dead_letters(10).await.unwrap();
     assert_eq!(dead.len(), 1);
     assert_eq!(dead[0].last_error.as_ref().unwrap().code, "BUSY");
+}
+
+#[tokio::test]
+async fn migrations_are_carmys_own_and_safe_to_repeat() {
+    let Some((pool, _guard)) = database().await else {
+        return;
+    };
+    // Several instances starting together take turns.
+    let runs = (0..4).map(|_| {
+        let pool = pool.clone();
+        tokio::spawn(async move { migrate(&pool).await })
+    });
+    for run in runs {
+        run.await.unwrap().unwrap();
+    }
+    let versions: Vec<i32> =
+        sqlx::query_scalar("SELECT version FROM carmy_schema_version ORDER BY version")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(versions, vec![1, 2, 3]);
+    // The app's own sqlx migrations are none of Carmy's business.
+    let touched: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.tables \
+         WHERE table_name = '_sqlx_migrations') \
+         AND EXISTS (SELECT 1 FROM _sqlx_migrations WHERE description LIKE 'carmy%' \
+                     AND installed_on > now() - interval '1 minute')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap_or(false);
+    assert!(!touched);
+}
+
+#[tokio::test]
+async fn cleanup_deletes_only_what_retention_lets_go() {
+    let Some((pool, _guard)) = database().await else {
+        return;
+    };
+    let store = PostgresJobStore::new(pool.clone());
+    let now = Utc::now();
+    let mut ids = Vec::new();
+    for (name, outcome) in [
+        ("old-done", Some(JobOutcome::Succeeded)),
+        ("new-done", Some(JobOutcome::Succeeded)),
+        (
+            "old-dead",
+            Some(JobOutcome::DeadLettered(AgentError::new(
+                "X",
+                "x",
+                ErrorCategory::Internal,
+            ))),
+        ),
+        ("old-queued", None),
+    ] {
+        let id = store
+            .enqueue(Jobs::prepare(request(name).with_request_id(name), now, 3))
+            .await
+            .unwrap();
+        if let Some(outcome) = outcome {
+            store.claim(now, Duration::from_secs(30), 10).await.unwrap();
+            store.finish(&id, outcome).await.unwrap();
+        }
+        ids.push(id);
+    }
+    let age = |id: &carmy_jobs::JobId| {
+        let pool = pool.clone();
+        let id = id.0.clone();
+        async move {
+            sqlx::query(
+                "UPDATE carmy_jobs SET finished_at = finished_at - interval '40 days', \
+                 run_at = run_at - interval '40 days' WHERE id = $1",
+            )
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+    };
+    age(&ids[0]).await;
+    age(&ids[2]).await;
+    age(&ids[3]).await;
+
+    let idempotency = PostgresIdempotencyStore::new(pool.clone());
+    let key = |id: &str| IdempotencyKey {
+        principal: None,
+        session: None,
+        request_id: id.into(),
+    };
+    let result = ExecutionResult {
+        execution_id: "exec".into(),
+        status: ExecutionStatus::Completed,
+        outcome: Ok(json!(1)),
+    };
+    for id in ["old-complete", "old-running", "new-complete"] {
+        idempotency.reserve(&key(id), "fp").await.unwrap();
+        if id != "old-running" {
+            idempotency.complete(&key(id), "fp", &result).await.unwrap();
+        }
+    }
+    sqlx::query(
+        "UPDATE carmy_idempotency SET created_at = now() - interval '10 days' \
+         WHERE key LIKE '%old-%'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let audit = Arc::new(PostgresAudit::new(pool.clone()));
+    let runtime = Runtime::new()
+        .sink(audit.clone())
+        .tool(Counting(Arc::new(AtomicUsize::new(0))))
+        .unwrap();
+    runtime.execute(request("a")).await;
+    runtime.execute(request("b")).await;
+    for _ in 0..50 {
+        if audit.recent(10).await.unwrap().len() == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    sqlx::query(
+        "UPDATE carmy_audit SET started_at = now() - interval '100 days' \
+         WHERE ctid IN (SELECT ctid FROM carmy_audit LIMIT 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let cleaned = cleanup(&pool, Retention::default()).await.unwrap();
+    assert_eq!(
+        cleaned,
+        Cleaned {
+            jobs: 1,
+            idempotency: 1,
+            audit: 1
+        }
+    );
+    assert!(
+        store.get(&ids[0]).await.unwrap().is_none(),
+        "old finished job"
+    );
+    assert!(
+        store.get(&ids[1]).await.unwrap().is_some(),
+        "recent finished job"
+    );
+    assert!(
+        store.get(&ids[2]).await.unwrap().is_some(),
+        "dead letters stay"
+    );
+    assert!(
+        store.get(&ids[3]).await.unwrap().is_some(),
+        "queued jobs stay"
+    );
+    assert!(
+        matches!(
+            idempotency
+                .reserve(&key("old-running"), "fp")
+                .await
+                .unwrap(),
+            Reservation::InProgress
+        ),
+        "in-progress records stay"
+    );
+    assert!(matches!(
+        idempotency
+            .reserve(&key("new-complete"), "fp")
+            .await
+            .unwrap(),
+        Reservation::Replay(_)
+    ));
+    assert!(matches!(
+        idempotency
+            .reserve(&key("old-complete"), "fp")
+            .await
+            .unwrap(),
+        Reservation::Acquired
+    ));
+    assert_eq!(audit.recent(10).await.unwrap().len(), 1);
+    assert_eq!(
+        cleanup(&pool, Retention::default()).await.unwrap(),
+        Cleaned::default()
+    );
 }
 
 #[tokio::test]

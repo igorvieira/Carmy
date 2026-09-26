@@ -53,7 +53,9 @@ O `InMemoryIdempotencyStore` padrão é local ao processo e limitado (10.000 ent
 Quando fica cheio, novas requisições falham de forma segura com `IDEMPOTENCY_CAPACITY`.
 Ele nunca descarta entradas que podem representar efeitos já efetivados.
 
-Para deploys duráveis ou com várias instâncias, implemente `IdempotencyStore`:
+Para deploys duráveis ou com várias instâncias, use o
+`carmy::postgres::PostgresIdempotencyStore` (veja [Postgres](/pt-br/guides/postgres/)), ou
+implemente `IdempotencyStore`:
 
 ```rust
 use carmy::runtime::{IdempotencyKey, IdempotencyStore, Reservation, StoreFuture};

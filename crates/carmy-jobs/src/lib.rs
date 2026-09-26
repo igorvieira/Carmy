@@ -403,6 +403,13 @@ impl Jobs {
         self.inner.store.dead_letters(limit).await
     }
 
+    /// Delete jobs that finished more than `older_than` ago; dead letters stay. Returns
+    /// how many were deleted.
+    pub async fn purge(&self, older_than: Duration) -> AgentResult<u64> {
+        let before = self.now() - chrono::Duration::from_std(older_than).expect("a bounded age");
+        self.inner.store.purge(before).await
+    }
+
     /// Whether a worker ticked within `within`.
     pub fn worker_alive(&self, within: Duration) -> bool {
         let last = self.inner.last_tick.load(Ordering::Relaxed);
@@ -548,8 +555,7 @@ impl Jobs {
                 let interval = lease / 3;
                 loop {
                     tokio::time::sleep(interval).await;
-                    let until = jobs.now() + chrono::Duration::from_std(lease).expect("lease");
-                    let _ = jobs.inner.store.heartbeat(&id, until).await;
+                    let _ = jobs.inner.store.extend_lease(&id, jobs.now(), lease).await;
                 }
             })
         };

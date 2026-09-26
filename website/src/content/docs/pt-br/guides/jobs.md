@@ -107,9 +107,11 @@ carmy::app().jobs(Arc::new(PostgresJobStore::new(pool.clone())))
 ```
 
 Os workers reivindicam com `FOR UPDATE SKIP LOCKED`, então qualquer número deles
-compartilha a fila. O store também oferece um **outbox transacional**:
-`store.enqueue_in(&mut tx, request, run_at, max_attempts)` insere o job dentro da sua
-transação, para que ele exista exatamente quando a escrita que ele acompanha for
-efetivada.
+compartilha a fila, e os leases seguem o relógio do banco. O store também oferece um
+**outbox transacional**. Veja [Postgres](/pt-br/guides/postgres/).
+
+Jobs terminados ficam até você apagá-los: `jobs.purge(older_than)` remove os que
+terminaram com sucesso, falharam ou foram cancelados, nunca os da DLQ. Quando o store em
+memória enche, ele descarta jobs terminados antes de recusar novos.
 
 Qualquer implementação de `JobStore` serve; a trait tem sete métodos.

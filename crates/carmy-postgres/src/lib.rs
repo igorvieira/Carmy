@@ -10,7 +10,10 @@
 //! # Ok(()) }
 //! ```
 //!
-//! Every `carmy_*` table is created by [`migrate`], which is safe to run on every start.
+//! Every `carmy_*` table is created by [`migrate`], which is safe to run on every start
+//! and never touches the application's own migrations. [`cleanup`] deletes old rows.
+//! Leases use the database clock, so workers on machines with skewed clocks agree on
+//! when a job's owner is gone.
 use carmy_core::{AgentError, AgentResult, ErrorCategory, ExecutionRequest, ExecutionResult};
 use carmy_jobs::{Job, JobId, JobOutcome, JobRequest, JobStatus, JobStore, StoreFuture};
 use carmy_runtime::{
@@ -32,9 +35,144 @@ pub async fn connect(url: &str) -> Result<PgPool, sqlx::Error> {
         .await
 }
 
-/// Creates or updates the `carmy_*` tables. Idempotent.
+/// Carmy's schema, in order. Versions are tracked in `carmy_schema_version`, apart from
+/// `_sqlx_migrations`, so they never collide with the application's migrations.
+const MIGRATIONS: &[(i32, &str)] = &[
+    (1, include_str!("../migrations/0001_carmy.sql")),
+    (2, include_str!("../migrations/0002_audit.sql")),
+    (3, include_str!("../migrations/0003_retention.sql")),
+];
+
+/// Creates or updates the `carmy_*` tables. Idempotent, and safe to run from several
+/// instances at once: they take turns on an advisory lock.
 pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {
-    sqlx::migrate!("./migrations").run(pool).await
+    use sqlx::migrate::MigrateError::Execute;
+    let mut tx = pool.begin().await.map_err(Execute)?;
+    apply_migrations(&mut tx).await.map_err(Execute)?;
+    tx.commit().await.map_err(Execute)
+}
+
+/// Boxed as `Send` here, with concrete lifetimes, so `migrate` can run inside
+/// `tokio::spawn` (sqlx's generic executors otherwise trip the compiler's
+/// higher-ranked lifetime checks).
+fn apply_migrations<'c>(
+    conn: &'c mut sqlx::PgConnection,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'c>> {
+    Box::pin(async move {
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtext('carmy_schema'))")
+            .execute(&mut *conn)
+            .await?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS carmy_schema_version ( \
+               version INTEGER PRIMARY KEY, \
+               applied_at TIMESTAMPTZ NOT NULL DEFAULT now() \
+             )",
+        )
+        .execute(&mut *conn)
+        .await?;
+        let applied: Vec<i32> = sqlx::query_scalar("SELECT version FROM carmy_schema_version")
+            .fetch_all(&mut *conn)
+            .await?;
+        for (version, sql) in MIGRATIONS {
+            if applied.contains(version) {
+                continue;
+            }
+            // Through the `Executor` trait: its boxed future is `Send`, while
+            // `RawSql::execute`'s is not general enough to cross `tokio::spawn`.
+            sqlx::Executor::execute(&mut *conn, sqlx::raw_sql(sql)).await?;
+            sqlx::query("INSERT INTO carmy_schema_version (version) VALUES ($1)")
+                .bind(version)
+                .execute(&mut *conn)
+                .await?;
+        }
+        Ok(())
+    })
+}
+
+/// How long [`cleanup`] keeps finished work.
+#[derive(Debug, Clone, Copy)]
+pub struct Retention {
+    /// Jobs that succeeded, failed or were cancelled. Dead letters always stay.
+    pub jobs: Duration,
+    /// Completed idempotency records. A `request_id` retried after this runs again, so
+    /// keep it longer than any client retries. In-progress records always stay.
+    pub idempotency: Duration,
+    /// Audit records.
+    pub audit: Duration,
+}
+
+impl Default for Retention {
+    /// 30 days of jobs, 7 days of idempotency, 90 days of audit.
+    fn default() -> Self {
+        const DAY: u64 = 24 * 3600;
+        Self {
+            jobs: Duration::from_secs(30 * DAY),
+            idempotency: Duration::from_secs(7 * DAY),
+            audit: Duration::from_secs(90 * DAY),
+        }
+    }
+}
+
+/// Rows [`cleanup`] deleted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Cleaned {
+    pub jobs: u64,
+    pub idempotency: u64,
+    pub audit: u64,
+}
+
+/// Delete what [`Retention`] no longer keeps, in batches so no table stays locked for
+/// long. Ages use the database clock. Run it from a command or a schedule.
+pub async fn cleanup(pool: &PgPool, retention: Retention) -> AgentResult<Cleaned> {
+    let batch = |table: &str, condition: &str| {
+        format!(
+            "DELETE FROM {table} WHERE ctid IN ( \
+               SELECT ctid FROM {table} WHERE {condition} LIMIT 5000 \
+             )"
+        )
+    };
+    let delete = |sql: String, age: Duration| async move {
+        let mut total = 0;
+        loop {
+            let done = sqlx::query(&sql)
+                .bind(age.as_secs_f64())
+                .execute(pool)
+                .await
+                .map_err(store_error)?
+                .rows_affected();
+            total += done;
+            if done == 0 {
+                return Ok::<u64, AgentError>(total);
+            }
+        }
+    };
+    let older = "< now() - make_interval(secs => $1)";
+    Ok(Cleaned {
+        jobs: delete(
+            batch(
+                "carmy_jobs",
+                &format!(
+                    "status IN ('succeeded', 'failed', 'cancelled') \
+                     AND COALESCE(finished_at, run_at) {older}"
+                ),
+            ),
+            retention.jobs,
+        )
+        .await?,
+        idempotency: delete(
+            batch(
+                "carmy_idempotency",
+                &format!("result IS NOT NULL AND created_at {older}"),
+            ),
+            retention.idempotency,
+        )
+        .await?,
+        audit: delete(
+            batch("carmy_audit", &format!("started_at {older}")),
+            retention.audit,
+        )
+        .await?,
+    })
 }
 
 /// A readiness check for the pool: `SELECT 1` must answer. Pass it to
@@ -219,25 +357,27 @@ impl JobStore for PostgresJobStore {
         limit: usize,
     ) -> StoreFuture<'a, Vec<Job>> {
         Box::pin(async move {
-            let lease_until = now + chrono::Duration::from_std(lease).expect("a bounded lease");
+            // Due times follow the app's clock (`run_at` was set by it); leases follow
+            // the database's, so every worker agrees on when an owner is gone.
             let rows = sqlx::query(&format!(
                 "WITH due AS ( \
                    SELECT id FROM carmy_jobs \
                    WHERE (status = 'queued' AND run_at <= $1) \
-                      OR (status = 'running' AND lease_until < $1) \
+                      OR (status = 'running' AND lease_until < now()) \
                    ORDER BY run_at \
                    LIMIT $2 \
                    FOR UPDATE SKIP LOCKED \
                  ) \
                  UPDATE carmy_jobs AS j \
-                 SET status = 'running', attempts = j.attempts + 1, lease_until = $3 \
+                 SET status = 'running', attempts = j.attempts + 1, \
+                     lease_until = now() + make_interval(secs => $3) \
                  FROM due WHERE j.id = due.id \
                  RETURNING j.id, {}",
                 COLUMNS.trim_start_matches("id, ")
             ))
             .bind(now)
             .bind(limit as i64)
-            .bind(lease_until)
+            .bind(lease.as_secs_f64())
             .fetch_all(&self.pool)
             .await
             .map_err(store_error)?;
@@ -259,6 +399,40 @@ impl JobStore for PostgresJobStore {
         })
     }
 
+    fn extend_lease<'a>(
+        &'a self,
+        id: &'a JobId,
+        _now: DateTime<Utc>,
+        lease: Duration,
+    ) -> StoreFuture<'a, ()> {
+        Box::pin(async move {
+            sqlx::query(
+                "UPDATE carmy_jobs SET lease_until = now() + make_interval(secs => $1) \
+                 WHERE id = $2 AND status = 'running'",
+            )
+            .bind(lease.as_secs_f64())
+            .bind(&id.0)
+            .execute(&self.pool)
+            .await
+            .map_err(store_error)?;
+            Ok(())
+        })
+    }
+
+    fn purge<'a>(&'a self, before: DateTime<Utc>) -> StoreFuture<'a, u64> {
+        Box::pin(async move {
+            let done = sqlx::query(
+                "DELETE FROM carmy_jobs WHERE status IN ('succeeded', 'failed', 'cancelled') \
+                 AND COALESCE(finished_at, run_at) < $1",
+            )
+            .bind(before)
+            .execute(&self.pool)
+            .await
+            .map_err(store_error)?;
+            Ok(done.rows_affected())
+        })
+    }
+
     fn finish<'a>(&'a self, id: &'a JobId, outcome: JobOutcome) -> StoreFuture<'a, ()> {
         Box::pin(async move {
             let error = |e: &AgentError| serde_json::to_value(e).expect("errors serialize");
@@ -270,7 +444,9 @@ impl JobStore for PostgresJobStore {
             };
             sqlx::query(
                 "UPDATE carmy_jobs SET status = $1, run_at = COALESCE($2, run_at), \
-                 last_error = $3, lease_until = NULL WHERE id = $4",
+                 last_error = $3, lease_until = NULL, \
+                 finished_at = CASE WHEN $1 = 'queued' THEN NULL ELSE now() END \
+                 WHERE id = $4",
             )
             .bind(status)
             .bind(run_at)
@@ -286,7 +462,8 @@ impl JobStore for PostgresJobStore {
     fn cancel<'a>(&'a self, id: &'a JobId) -> StoreFuture<'a, bool> {
         Box::pin(async move {
             let done = sqlx::query(
-                "UPDATE carmy_jobs SET status = 'cancelled' WHERE id = $1 AND status = 'queued'",
+                "UPDATE carmy_jobs SET status = 'cancelled', finished_at = now() \
+                 WHERE id = $1 AND status = 'queued'",
             )
             .bind(&id.0)
             .execute(&self.pool)
