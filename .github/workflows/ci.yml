@@ -35,3 +35,26 @@ jobs:
           cache-dependency-path: website/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Known vulnerabilities, licenses, sources and bans
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories licenses sources bans
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - run: cargo install cargo-fuzz --locked
+      - name: Fuzz the console protocol and the HTTP execute endpoint
+        working-directory: fuzz
+        run: |
+          cargo fuzz build
+          cargo fuzz run console_protocol -- -max_total_time=60
+          cargo fuzz run http_execute -- -max_total_time=60
