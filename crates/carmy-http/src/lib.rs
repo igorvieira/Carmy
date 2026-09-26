@@ -190,11 +190,12 @@ fn decode(
     let Json(dto) = payload.map_err(|e| Box::new(rejection(&e)))?;
     let mut request = execution_request(dto.tool, dto.arguments);
     request.request_id = dto.request_id;
-    if let Some(Extension(ctx)) = context {
+    // A host-provided context gets a child token, so cancelling one execution cannot
+    // cancel a session. Without one, the request's fresh token is already independent.
+    if let Some(Extension(mut ctx)) = context {
+        ctx.cancellation = ctx.cancellation.child_token();
         request.context = ctx;
     }
-    // Each request gets a child token, so cancelling one execution cannot cancel a session.
-    request.context.cancellation = request.context.cancellation.child_token();
     Ok(request)
 }
 fn rejection(e: &JsonRejection) -> Response {
