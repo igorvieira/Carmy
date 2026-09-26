@@ -57,6 +57,11 @@ pub mod runtime {
 pub mod jobs {
     pub use carmy_jobs::*;
 }
+/// Durable Postgres stores for jobs and idempotency.
+#[cfg(feature = "postgres")]
+pub mod postgres {
+    pub use carmy_postgres::*;
+}
 /// HTTP transport: discovery, tool listing, execution and SSE.
 #[cfg(feature = "http")]
 pub mod http {

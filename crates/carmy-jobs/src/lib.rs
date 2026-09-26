@@ -324,24 +324,37 @@ impl Jobs {
         self.enqueue_job(request, at, None).await
     }
 
+    /// A queued [`Job`] for `request`, for stores that insert jobs themselves (e.g. a
+    /// transactional outbox).
+    pub fn prepare(request: ExecutionRequest, run_at: DateTime<Utc>, max_attempts: u32) -> Job {
+        Job {
+            id: JobId(format!("job_{}", uuid::Uuid::new_v4())),
+            request: request.into(),
+            run_at,
+            created_at: Utc::now(),
+            attempts: 0,
+            max_attempts,
+            status: JobStatus::Queued,
+            last_error: None,
+            lease_until: None,
+            schedule: None,
+        }
+    }
+
+    /// The configured attempt limit, for outbox inserts.
+    pub fn max_attempts(&self) -> u32 {
+        self.inner.retry.max_attempts
+    }
+
     async fn enqueue_job(
         &self,
         request: ExecutionRequest,
         at: DateTime<Utc>,
         schedule: Option<String>,
     ) -> AgentResult<JobId> {
-        let job = Job {
-            id: JobId(format!("job_{}", uuid::Uuid::new_v4())),
-            request: request.into(),
-            run_at: at,
-            created_at: self.now(),
-            attempts: 0,
-            max_attempts: self.inner.retry.max_attempts,
-            status: JobStatus::Queued,
-            last_error: None,
-            lease_until: None,
-            schedule,
-        };
+        let mut job = Self::prepare(request, at, self.inner.retry.max_attempts);
+        job.created_at = self.now();
+        job.schedule = schedule;
         self.inner.store.enqueue(job).await
     }
 
