@@ -12,9 +12,9 @@ keywords = ["agents", "postgres", "jobs", "idempotency", "llm"]
 categories = ["database", "asynchronous"]
 
 [dependencies]
-carmy-core = { path = "../carmy-core", version = "0.3.0" }
-carmy-runtime = { path = "../carmy-runtime", version = "0.3.0" }
-carmy-jobs = { path = "../carmy-jobs", version = "0.3.0" }
+carmy-core = { path = "../carmy-core", version = "0.4.0" }
+carmy-runtime = { path = "../carmy-runtime", version = "0.4.0" }
+carmy-jobs = { path = "../carmy-jobs", version = "0.4.0" }
 chrono = { version = "0.4", features = ["serde"] }
 serde_json.workspace = true
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "migrate", "json", "chrono"] }

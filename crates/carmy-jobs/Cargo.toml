@@ -12,8 +12,8 @@ keywords = ["agents", "jobs", "queue", "idempotency", "llm"]
 categories = ["asynchronous"]
 
 [dependencies]
-carmy-core = { path = "../carmy-core", version = "0.3.0" }
-carmy-runtime = { path = "../carmy-runtime", version = "0.3.0" }
+carmy-core = { path = "../carmy-core", version = "0.4.0" }
+carmy-runtime = { path = "../carmy-runtime", version = "0.4.0" }
 chrono = { version = "0.4", features = ["serde"] }
 cron = "0.17"
 serde.workspace = true

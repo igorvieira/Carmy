@@ -6,6 +6,8 @@ All notable changes to Carmy are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-26
+
 ### Added
 
 - **`carmy-jobs`: tools that run later.** `Jobs` enqueues an `ExecutionRequest` now,
@@ -148,6 +150,7 @@ The first release.
 - **Tracing spans** for every execution, without recording payloads.
 - **Documentation** at https://carmy-pi.vercel.app, in English and Brazilian Portuguese.
 
+[0.4.0]: https://github.com/igorvieira/Carmy/releases/tag/v0.4.0
 [0.3.0]: https://github.com/igorvieira/Carmy/releases/tag/v0.3.0
 [0.2.0]: https://github.com/igorvieira/Carmy/releases/tag/v0.2.0
 [0.1.0]: https://github.com/igorvieira/Carmy/releases/tag/v0.1.0

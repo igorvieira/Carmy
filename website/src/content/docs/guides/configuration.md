@@ -83,5 +83,5 @@ carmy::app()
 | `postgres` | no | `carmy::postgres`: durable job, idempotency and audit stores |
 
 ```toml
-carmy = { version = "0.3", default-features = false, features = ["http"] }
+carmy = { version = "0.4", default-features = false, features = ["http"] }
 ```

@@ -83,5 +83,5 @@ O `Carmy::new()` ignora por completo o arquivo, o ambiente e o registro automát
 | `postgres` | não | `carmy::postgres`: stores duráveis de jobs, idempotência e auditoria |
 
 ```toml
-carmy = { version = "0.3", default-features = false, features = ["http"] }
+carmy = { version = "0.4", default-features = false, features = ["http"] }
 ```

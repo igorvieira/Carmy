@@ -44,7 +44,11 @@ fn generates_conventional_layout() {
     assert!(manifest.contains("git = \"https://github.com/igorvieira/Carmy\""));
     let root = generate(&parent, "shop-crates", &Dependency::CratesIo).unwrap();
     let manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap();
-    assert!(manifest.contains("carmy = \"0.3\""), "{manifest}");
+    let minor = env!("CARGO_PKG_VERSION").rsplitn(2, '.').last().unwrap();
+    assert!(
+        manifest.contains(&format!("carmy = \"{minor}\"")),
+        "{manifest}"
+    );
 }
 
 #[test]
