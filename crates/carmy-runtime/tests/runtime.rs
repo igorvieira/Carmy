@@ -250,3 +250,27 @@ async fn dropping_event_stream_cancels_execution() {
     drop(stream);
     assert!(token.is_cancelled());
 }
+#[test]
+fn execution_ids_are_unique_across_threads() {
+    let ids: Vec<String> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                scope.spawn(|| {
+                    (0..10_000)
+                        .map(|_| execution_request("echo", json!("x")).execution_id)
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .flat_map(|w| w.join().unwrap())
+            .collect()
+    });
+    let unique: std::collections::HashSet<_> = ids.iter().collect();
+    assert_eq!(unique.len(), ids.len());
+    assert!(
+        ids.iter()
+            .all(|id| id.starts_with("exec_") && id.len() == 41)
+    );
+}
