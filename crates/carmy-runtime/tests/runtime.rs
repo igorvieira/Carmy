@@ -274,3 +274,46 @@ fn execution_ids_are_unique_across_threads() {
             .all(|id| id.starts_with("exec_") && id.len() == 41)
     );
 }
+struct Panics {
+    after_await: bool,
+}
+impl Tool for Panics {
+    type Input = String;
+    type Output = String;
+    fn metadata(&self) -> ToolMetadata {
+        let mut m = Echo(Effect::Read).metadata();
+        m.name = "panics".into();
+        m
+    }
+    async fn execute(&self, _: AgentContext, _: String) -> AgentResult<String> {
+        if self.after_await {
+            tokio::task::yield_now().await;
+        }
+        panic!("tool bug");
+    }
+}
+#[tokio::test]
+async fn panics_are_isolated_on_every_path() {
+    for after_await in [false, true] {
+        let rt = Runtime::new().tool(Panics { after_await }).unwrap();
+        let mut req = request(json!("x"));
+        req.tool = "panics".into();
+        let result = rt.execute(req).await;
+        assert_eq!(result.status, ExecutionStatus::Failed);
+        assert_eq!(result.outcome.unwrap_err().code, "TOOL_PANIC");
+    }
+}
+#[tokio::test]
+async fn deadline_applies_once_a_tool_suspends() {
+    let rt = Runtime::new()
+        .timeout(Duration::from_millis(20))
+        .tool(Write {
+            calls: Arc::default(),
+            delay: Duration::from_secs(5),
+        })
+        .unwrap();
+    let started = std::time::Instant::now();
+    let result = rt.execute(request(json!("x"))).await;
+    assert_eq!(result.outcome.unwrap_err().code, "TIMEOUT");
+    assert!(started.elapsed() < Duration::from_secs(1));
+}

@@ -337,11 +337,45 @@ impl Runtime {
             }
             Ok(value)
         };
-        let outcome = tokio::select! {
-            biased;
-            _ = cancellation.cancelled() => Err(error("CANCELLED", "Execution cancelled; external effects may have committed", ErrorCategory::Cancelled)),
-            _ = tokio::time::sleep(self.timeout) => { cancellation.cancel(); Err(error("TIMEOUT", "Execution timed out; external effects may have committed", ErrorCategory::Timeout)) },
-            result = AssertUnwindSafe(work).catch_unwind() => result.unwrap_or_else(|_| Err(error("TOOL_PANIC", "Tool panicked; external effects may have committed", ErrorCategory::Internal))),
+        let cancelled = || {
+            error(
+                "CANCELLED",
+                "Execution cancelled; external effects may have committed",
+                ErrorCategory::Cancelled,
+            )
+        };
+        let panicked = |_| {
+            Err(error(
+                "TOOL_PANIC",
+                "Tool panicked; external effects may have committed",
+                ErrorCategory::Internal,
+            ))
+        };
+        let deadline = Instant::now() + self.timeout;
+        let mut work = std::pin::pin!(AssertUnwindSafe(work).catch_unwind());
+        // A tool that finishes on its first poll never needs the deadline timer or a
+        // cancellation waiter, and registering both costs shared locks on every call.
+        // Cancellation is checked right before that poll; once the tool suspends, the
+        // select keeps the usual precedence: cancellation, then deadline, then the tool.
+        let outcome = if cancellation.is_cancelled() {
+            Err(cancelled())
+        } else {
+            match futures_util::poll!(work.as_mut()) {
+                Poll::Ready(result) => result.unwrap_or_else(panicked),
+                Poll::Pending => tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => Err(cancelled()),
+                    _ = tokio::time::sleep_until(deadline.into()) => {
+                        cancellation.cancel();
+                        Err(error(
+                            "TIMEOUT",
+                            "Execution timed out; external effects may have committed",
+                            ErrorCategory::Timeout,
+                        ))
+                    }
+                    result = &mut work => result.unwrap_or_else(panicked),
+                },
+            }
         };
         emit(events, || ExecutionEvent::ToolCompleted {
             execution_id: execution_id.clone(),
