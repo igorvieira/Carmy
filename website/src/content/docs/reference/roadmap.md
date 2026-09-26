@@ -5,7 +5,7 @@ sidebar:
   order: 6
 ---
 
-Carmy is at `0.2.0`, and its API is unstable during 0.x.
+Carmy is at `0.3.0`, and its API is unstable during 0.x.
 
 ## Next
 
@@ -15,7 +15,6 @@ Carmy is at `0.2.0`, and its API is unstable during 0.x.
   stream.
 - **Transports:** MCP Streamable HTTP, and approvals through MCP elicitation.
 - **Idempotency stores:** durable adapters (Postgres, Redis) as separate crates.
-- **CLI:** `carmy generate tool`.
 
 ## Out of scope
 

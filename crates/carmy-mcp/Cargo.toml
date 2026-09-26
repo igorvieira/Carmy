@@ -10,8 +10,8 @@ description = "Agent-native execution infrastructure: MCP adapter"
 
 
 [dependencies]
-carmy-core = { path = "../carmy-core", version = "0.2.0" }
-carmy-runtime = { path = "../carmy-runtime", version = "0.2.0" }
+carmy-core = { path = "../carmy-core", version = "0.3.0" }
+carmy-runtime = { path = "../carmy-runtime", version = "0.3.0" }
 rmcp = { version = "3.4", default-features = false, features = ["server", "transport-io"] }
 serde_json.workspace = true
 tokio.workspace = true

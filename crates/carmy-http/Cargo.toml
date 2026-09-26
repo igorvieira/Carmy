@@ -10,8 +10,8 @@ description = "Agent-native execution infrastructure: http"
 
 
 [dependencies]
-carmy-core = { path = "../carmy-core", version = "0.2.0" }
-carmy-runtime = { path = "../carmy-runtime", version = "0.2.0" }
+carmy-core = { path = "../carmy-core", version = "0.3.0" }
+carmy-runtime = { path = "../carmy-runtime", version = "0.3.0" }
 axum = "0.8"
 futures-util = "0.3"
 serde.workspace = true

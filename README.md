@@ -30,7 +30,7 @@ MCP today).
 
 > LLM reasoning can be probabilistic. Side effects should not be.
 
-Status: `0.2.0` on [crates.io](https://crates.io/crates/carmy). The API is unstable during 0.x.
+Status: `0.3.0` on [crates.io](https://crates.io/crates/carmy). The API is unstable during 0.x.
 
 ## Why Carmy
 
@@ -58,6 +58,10 @@ $ cargo run -- tools     # print the tool catalog
 $ carmy console          # explore and call the tools in a terminal UI
 $ cargo test
 ```
+
+<p align="center">
+  <img alt="carmy console: a terminal UI to explore and call tools" src="https://raw.githubusercontent.com/igorvieira/Carmy/main/assets/console.png" width="720">
+</p>
 
 Carmy favors convention over configuration. A new application looks like this:
 
