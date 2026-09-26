@@ -201,29 +201,30 @@ impl Runtime {
         let cancellation = request.context.cancellation.clone();
         let cancel_on_drop = cancellation.clone().drop_guard();
         let id = request.execution_id.clone();
-        let emit = |event| {
-            if let Some(sender) = &events {
-                let _ = sender.send(event);
-            }
-        };
+        let events = events.as_ref();
+        let registered = self.tools.get(&request.tool);
         // Arguments and outputs are never recorded: they may carry secrets.
         let span = tracing::info_span!(
             "carmy.execution",
             execution_id = %id,
             request_id = request.request_id.as_deref(),
             tool = %request.tool,
-            effect = self.metadata(&request.tool).map(|m| m.effect.as_str()),
+            effect = registered.map(|t| t.metadata.effect.as_str()),
             status = field::Empty,
             duration_ms = field::Empty,
             replayed = field::Empty,
             error_code = field::Empty,
         );
         let started = Instant::now();
-        emit(ExecutionEvent::ExecutionStarted {
+        emit(events, || ExecutionEvent::ExecutionStarted {
             execution_id: id.clone(),
             tool: request.tool.clone(),
         });
-        let (response, replayed) = match self.run(request, &emit).instrument(span.clone()).await {
+        let outcome = self
+            .run(request, registered, events)
+            .instrument(span.clone())
+            .await;
+        let (response, replayed) = match outcome {
             Ok(done) => done,
             Err(e) => (result(id, Err(e)), false),
         };
@@ -237,7 +238,7 @@ impl Runtime {
                 tracing::warn!(parent: &span, "execution failed");
             }
         }
-        emit(ExecutionEvent::ExecutionCompleted {
+        emit(events, || ExecutionEvent::ExecutionCompleted {
             result: response.clone(),
             replayed,
         });
@@ -247,11 +248,10 @@ impl Runtime {
     async fn run(
         &self,
         request: ExecutionRequest,
-        emit: &(dyn Fn(ExecutionEvent) + Send + Sync),
+        registered: Option<&Registered>,
+        events: Option<&Sender>,
     ) -> AgentResult<(ExecutionResult, bool)> {
-        let registered = self
-            .tools
-            .get(&request.tool)
+        let registered = registered
             .ok_or_else(|| error("TOOL_NOT_FOUND", "Unknown tool", ErrorCategory::NotFound))?;
         for policy in &self.policies {
             policy.check(&request.context, &registered.metadata)?;
@@ -313,7 +313,7 @@ impl Runtime {
         }
         let cancellation = request.context.cancellation.clone();
         let (execution_id, tool) = (request.execution_id, request.tool);
-        emit(ExecutionEvent::ToolStarted {
+        emit(events, || ExecutionEvent::ToolStarted {
             execution_id: execution_id.clone(),
             tool: tool.clone(),
         });
@@ -343,7 +343,7 @@ impl Runtime {
             _ = tokio::time::sleep(self.timeout) => { cancellation.cancel(); Err(error("TIMEOUT", "Execution timed out; external effects may have committed", ErrorCategory::Timeout)) },
             result = AssertUnwindSafe(work).catch_unwind() => result.unwrap_or_else(|_| Err(error("TOOL_PANIC", "Tool panicked; external effects may have committed", ErrorCategory::Internal))),
         };
-        emit(ExecutionEvent::ToolCompleted {
+        emit(events, || ExecutionEvent::ToolCompleted {
             execution_id: execution_id.clone(),
             tool,
             duration_ms: started.elapsed().as_millis() as u64,
@@ -357,6 +357,12 @@ impl Runtime {
     }
 }
 type Sender = mpsc::UnboundedSender<ExecutionEvent>;
+/// Builds the event only when a stream is listening.
+fn emit(events: Option<&Sender>, event: impl FnOnce() -> ExecutionEvent) {
+    if let Some(sender) = events {
+        let _ = sender.send(event());
+    }
+}
 /// Stream of [`ExecutionEvent`]s ending with `ExecutionCompleted`.
 pub struct ExecutionStream {
     work: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
