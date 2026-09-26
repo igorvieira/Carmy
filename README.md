@@ -398,8 +398,8 @@ releases and CI healthy.
 
 **[Sponsor Carmy on GitHub →](https://github.com/sponsors/igorvieira)**
 
-Companies that depend on Carmy can sponsor at a tier that includes their logo in this
-README and on the [documentation site](https://carmy-pi.vercel.app/sponsor/).
+Companies that sponsor Carmy get their logo in this README and on the
+[documentation site](https://carmy-pi.vercel.app/sponsor/).
 
 ## License
 
