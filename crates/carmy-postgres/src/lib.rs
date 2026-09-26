@@ -37,6 +37,23 @@ pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {
     sqlx::migrate!("./migrations").run(pool).await
 }
 
+/// A readiness check for the pool: `SELECT 1` must answer. Pass it to
+/// `Carmy::ready("database", move || ready(pool.clone()))`.
+pub async fn ready(pool: PgPool) -> AgentResult<()> {
+    sqlx::query("SELECT 1")
+        .execute(&pool)
+        .await
+        .map(|_| ())
+        .map_err(|e| {
+            AgentError::new(
+                "DATABASE_UNAVAILABLE",
+                format!("Postgres did not answer: {e}"),
+                ErrorCategory::Capacity,
+            )
+            .retryable(Some(1))
+        })
+}
+
 fn store_error(e: sqlx::Error) -> AgentError {
     AgentError::new(
         "STORE_ERROR",

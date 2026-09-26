@@ -67,7 +67,16 @@ pub struct Carmy {
     audit: Arc<carmy_runtime::InMemoryAudit>,
     #[cfg(feature = "http")]
     webhooks: Vec<(String, carmy_http::Webhook)>,
+    #[cfg(feature = "http")]
+    readiness: Vec<(String, Arc<dyn carmy_http::ReadyCheck>)>,
+    #[cfg(feature = "http")]
+    routes: Vec<axum::Router>,
+    worker_liveness: Option<Duration>,
+    commands: std::collections::HashMap<String, Command>,
 }
+/// An app-defined command: receives the builder and runs to completion.
+pub type Command =
+    Box<dyn FnOnce(Carmy) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result>>>>;
 type ScheduleSpec = (
     String,
     String,
@@ -97,7 +106,49 @@ impl Carmy {
             audit: Arc::new(carmy_runtime::InMemoryAudit::default()),
             #[cfg(feature = "http")]
             webhooks: Vec::new(),
+            #[cfg(feature = "http")]
+            readiness: Vec::new(),
+            #[cfg(feature = "http")]
+            routes: Vec::new(),
+            worker_liveness: None,
+            commands: std::collections::HashMap::new(),
         }
+    }
+    /// A dependency `GET /ready` verifies; see [`carmy_http::ReadyCheck`]. A closure
+    /// returning a future works: `.ready("database", move || ready(pool.clone()))`.
+    #[cfg(feature = "http")]
+    pub fn ready(
+        mut self,
+        name: impl Into<String>,
+        check: impl carmy_http::ReadyCheck + 'static,
+    ) -> Self {
+        self.readiness.push((name.into(), Arc::new(check)));
+        self
+    }
+    /// Report not ready unless a worker ticked the job queue within `within`. For
+    /// servers that depend on their jobs actually running.
+    pub fn require_worker(mut self, within: Duration) -> Self {
+        self.worker_liveness = Some(within);
+        self
+    }
+    /// Mount the app's own routes (a site, redirects, an admin) next to the agent
+    /// routes, behind the same connection limits and timeouts.
+    #[cfg(feature = "http")]
+    pub fn routes(mut self, router: axum::Router) -> Self {
+        self.routes.push(router);
+        self
+    }
+    /// An extra command for [`Carmy::run`], e.g.
+    /// `.command("migrate", |app| Box::pin(async move { .. }))`. The closure receives
+    /// the builder, so it can build the runtime or read its state.
+    pub fn command(
+        mut self,
+        name: impl Into<String>,
+        run: impl FnOnce(Carmy) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result>>>
+        + 'static,
+    ) -> Self {
+        self.commands.insert(name.into(), Box::new(run));
+        self
     }
     /// Also send every [`carmy_runtime::ExecutionRecord`] here (a durable audit trail,
     /// say). The in-memory trail the console shows stays on.
@@ -244,8 +295,35 @@ impl Carmy {
     pub fn router(mut self) -> Result<axum::Router, Error> {
         let (name, options) = (self.name.clone(), self.http.clone());
         let webhooks = std::mem::take(&mut self.webhooks);
+        let mut readiness = std::mem::take(&mut self.readiness);
+        let routes = std::mem::take(&mut self.routes);
+        let worker_liveness = self.worker_liveness;
         let (runtime, jobs) = self.build_with_jobs()?;
-        let mut router = carmy_http::router(runtime.clone(), name);
+        if let Some(within) = worker_liveness {
+            let jobs = jobs.clone();
+            readiness.push((
+                "worker".into(),
+                Arc::new(move || {
+                    let alive = jobs.worker_alive(within);
+                    async move {
+                        if alive {
+                            Ok(())
+                        } else {
+                            Err(AgentError::new(
+                                "WORKER_DOWN",
+                                format!("no job worker ticked within {within:?}"),
+                                crate::ErrorCategory::Capacity,
+                            ))
+                        }
+                    }
+                }),
+            ));
+        }
+        let mut router =
+            carmy_http::router(runtime.clone(), name).merge(carmy_http::health_router(readiness));
+        for own in routes {
+            router = router.merge(own);
+        }
         if !webhooks.is_empty() {
             let queue: Arc<dyn carmy_http::Enqueue> = Arc::new(JobQueue(jobs));
             router = router.merge(
@@ -280,15 +358,23 @@ impl Carmy {
     /// | `mcp`              | serve MCP over stdin/stdout                       |
     /// | `console`          | serve the `carmy-console/1` protocol over stdio   |
     /// | `tools`            | print the tool catalog as JSON and exit           |
+    /// | *(custom)*         | anything added with [`Carmy::command`]             |
     pub async fn run(self) -> Result {
         let command = std::env::args().nth(1);
+        self.run_command(command.as_deref()).await
+    }
+    /// [`Carmy::run`] with an explicit command instead of the process arguments.
+    pub async fn run_command(mut self, command: Option<&str>) -> Result {
         // The console's stdout carries its protocol, so it logs warnings only by default.
         #[cfg(feature = "observability")]
-        let _ = carmy_observability::init_with(match command.as_deref() {
+        let _ = carmy_observability::init_with(match command {
             Some("console") => "warn",
             _ => "info",
         });
-        match command.as_deref() {
+        if let Some(run) = command.and_then(|c| self.commands.remove(c)) {
+            return run(self).await;
+        }
+        match command {
             None | Some("server") => self.run_http().await,
             Some("console") => {
                 let name = self.name.clone();
@@ -327,9 +413,14 @@ impl Carmy {
                 println!("{catalog}");
                 Ok(())
             }
-            Some(other) => Err(Error::Usage(format!(
-                "unknown command `{other}`; expected `server`, `worker`, `mcp`, `console` or `tools`"
-            ))),
+            Some(other) => {
+                let mut known: Vec<&str> = vec!["server", "worker", "mcp", "console", "tools"];
+                known.extend(self.commands.keys().map(String::as_str));
+                Err(Error::Usage(format!(
+                    "unknown command `{other}`; expected one of: {}",
+                    known.join(", ")
+                )))
+            }
         }
     }
     #[cfg(feature = "http")]
