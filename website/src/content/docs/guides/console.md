@@ -46,6 +46,26 @@ It builds your application, then shows the following:
 Arguments and `request_id`s are kept per tool, because reusing a `request_id` with
 another tool is an idempotency conflict.
 
+### Destructive tools
+
+A tool marked 🔒 won't run until it's confirmed. Select it and press `c`:
+
+![Confirmation modal for a destructive tool](/console/confirm.png)
+
+After `y`, the lock turns into ✓ for this session and the call goes through:
+
+![The destructive tool confirmed and run](/console/confirmed.png)
+
+The grant is the same `confirm:<tool>` permission a host sets in production. Press `c`
+again to revoke it.
+
+### History
+
+`h` lists every call of the session. `Enter` runs one again, with the same arguments
+and `request_id`:
+
+![The history of the session](/console/history.png)
+
 ## For agents: `carmy-console/1`
 
 ```console

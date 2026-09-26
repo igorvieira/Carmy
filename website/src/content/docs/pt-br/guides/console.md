@@ -46,6 +46,26 @@ Ele compila a aplicação e depois mostra o seguinte:
 Os argumentos e o `request_id` ficam guardados por tool, porque reusar um `request_id`
 em outra tool é um conflito de idempotência.
 
+### Tools destrutivas
+
+Uma tool marcada com 🔒 não roda até ser confirmada. Selecione-a e aperte `c`:
+
+![Modal de confirmação de uma tool destrutiva](/console/confirm.png)
+
+Depois do `y`, o cadeado vira ✓ nesta sessão e a chamada passa:
+
+![A tool destrutiva confirmada e executada](/console/confirmed.png)
+
+A concessão é a mesma permissão `confirm:<tool>` que um host define em produção. Aperte
+`c` de novo para revogá-la.
+
+### Histórico
+
+`h` lista todas as chamadas da sessão. `Enter` roda uma delas de novo, com os mesmos
+argumentos e o mesmo `request_id`:
+
+![O histórico da sessão](/console/history.png)
+
 ## Para agentes: `carmy-console/1`
 
 ```console
