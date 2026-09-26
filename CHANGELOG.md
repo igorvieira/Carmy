@@ -20,10 +20,11 @@ All notable changes to Carmy are documented here. The format follows
   SKIP LOCKED`, a transactional outbox through `enqueue_in`), `PostgresIdempotencyStore`
   (atomic reservations shared across instances) and `PostgresAudit`, plus `migrate` and
   `ready`. The contract tests run against a Postgres service in CI.
-- **Webhooks as tools.** `Carmy::webhook(path, Webhook::stripe(..) | telegram(..) |
-  hmac_sha256(..))` verifies the delivery on the raw body in constant time, uses the
-  provider's event id as `request_id` so redeliveries replay, and runs the tool inline or
-  as a job (`.enqueue()`, answering `202`).
+- **Webhooks as tools.** `Carmy::webhook(path, Webhook::hmac_sha256(..) |
+  shared_secret(..) | custom(..))` verifies the delivery on the raw body in constant
+  time, takes the `request_id` from a JSON pointer into the payload (`.event_id("/id")`)
+  so redeliveries replay, and runs the tool inline or as a job (`.enqueue()`, answering
+  `202`). Carmy ships no provider-specific integrations.
 - **Audit trail.** `ExecutionSink` receives an `ExecutionRecord` after every execution,
   replays and rejections included, never with arguments or outputs. Every app keeps the
   latest records in memory; `.sink(..)` adds durable ones. The console gains `audit` and
@@ -33,7 +34,7 @@ All notable changes to Carmy are documented here. The format follows
   for the queue), `Carmy::routes(axum::Router)` behind the same hardening,
   `Carmy::command(name, run)` for the app's own commands, and `Carmy::router_and_jobs`.
 - **`examples/curator`,** the reference pipeline application: a scheduled collection,
-  one job per offer, publications that never duplicate, a Stripe webhook, `/ready`,
+  one job per offer, publications that never duplicate, a signed billing webhook, `/ready`,
   `/deals`, and Postgres behind `DATABASE_URL`. Its end-to-end test runs two workers, a
   refused publication and a redelivered webhook.
 

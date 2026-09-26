@@ -160,7 +160,7 @@ Runnable examples in this repository:
 
 - `cargo run -p tool-server`: the conventional style, with `State`. Add `-- mcp` to serve it over MCP.
 - `cargo run -p hello-agent`: the explicit layer. It drives the runtime in-process, with no transport.
-- `cargo run -p curator`: the reference pipeline application: scheduled collection, one job per offer, publications that never duplicate, a Stripe webhook, readiness and the app's own routes. `-- worker` runs the jobs; `--features postgres` with `DATABASE_URL` makes everything durable.
+- `cargo run -p curator`: the reference pipeline application: scheduled collection, one job per offer, publications that never duplicate, a signed billing webhook, readiness and the app's own routes. `-- worker` runs the jobs; `--features postgres` with `DATABASE_URL` makes everything durable.
 
 ## Tools
 
@@ -280,7 +280,7 @@ jobs.enqueue_after(request, Duration::from_secs(24 * 3600)).await?;
 carmy::app()
     .jobs(Arc::new(PostgresJobStore::new(pool.clone())))            // or the in-memory default
     .schedule("collect", "0 */5 * * * * *", || execution_request("collect_offers", json!({})))
-    .webhook("/webhooks/stripe", Webhook::stripe(secret).tool("membership_event").enqueue())
+    .webhook("/webhooks/billing", Webhook::hmac_sha256(secret, "X-Signature").tool("billing_event").event_id("/id").enqueue())
     .ready("database", move || carmy::postgres::ready(pool.clone()))
     .routes(site)
     .run().await   // `cargo run -- worker` runs the jobs
@@ -290,9 +290,9 @@ carmy::app()
   `max_attempts`; uncertain outcomes (`TIMEOUT`, `CANCELLED`, `TOOL_PANIC`) retry only
   idempotent tools and otherwise go to the dead-letter queue, where a person or an agent
   decides.
-- **Webhooks are tools:** the delivery is verified on the raw body (Stripe, Telegram or
-  any HMAC-SHA256 header), the provider's event id becomes the `request_id`, and a
-  redelivery replays.
+- **Webhooks are tools:** the delivery is verified on the raw body (an HMAC-SHA256
+  signature, a shared secret, or your own check), an id read from the payload becomes
+  the `request_id`, and a redelivery replays.
 - **Every execution is audited:** who ran what, when, and how it ended, never the
   arguments or outputs. `carmy console` shows the trail with `audit` and the dead letters
   with `dead`.

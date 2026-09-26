@@ -14,7 +14,7 @@ fn settings() -> Settings {
     Settings {
         offers: sample_offers(),
         premium_window: Duration::from_millis(0),
-        stripe_secret: "whsec_test".into(),
+        webhook_secret: "s3cret".into(),
         retry: RetryPolicy {
             max_attempts: 3,
             base: Duration::from_millis(1),
@@ -23,13 +23,12 @@ fn settings() -> Settings {
     }
 }
 
-fn stripe_delivery(secret: &str, body: &str) -> Request<Body> {
-    let t = chrono::Utc::now().timestamp();
+fn billing_delivery(secret: &str, body: &str) -> Request<Body> {
     let mut mac = Hmac::<sha2::Sha256>::new_from_slice(secret.as_bytes()).unwrap();
-    mac.update(format!("{t}.{body}").as_bytes());
-    let signature = format!("t={t},v1={}", hex::encode(mac.finalize().into_bytes()));
-    Request::post("/webhooks/stripe")
-        .header("stripe-signature", signature)
+    mac.update(body.as_bytes());
+    let signature = format!("sha256={}", hex::encode(mac.finalize().into_bytes()));
+    Request::post("/webhooks/billing")
+        .header("x-signature", signature)
         .body(Body::from(body.to_owned()))
         .unwrap()
 }
@@ -113,7 +112,7 @@ async fn offers_become_deals_and_are_published_exactly_once() {
         .unwrap();
     assert_eq!(ready.status(), 200, "run_due counts as a worker tick");
 
-    // A Stripe event, delivered twice, changes the membership once.
+    // A billing event, delivered twice, changes the membership once.
     let event = json!({
         "id": "evt_sub_1",
         "type": "customer.subscription.created",
@@ -123,7 +122,7 @@ async fn offers_become_deals_and_are_published_exactly_once() {
     for _ in 0..2 {
         let response = router
             .clone()
-            .oneshot(stripe_delivery("whsec_test", &event))
+            .oneshot(billing_delivery("s3cret", &event))
             .await
             .unwrap();
         assert_eq!(response.status(), 202);
@@ -135,7 +134,7 @@ async fn offers_become_deals_and_are_published_exactly_once() {
     assert!(audit_runs.is_none());
 
     let forged = router
-        .oneshot(stripe_delivery("wrong", &event))
+        .oneshot(billing_delivery("wrong", &event))
         .await
         .unwrap();
     assert_eq!(forged.status(), 401);

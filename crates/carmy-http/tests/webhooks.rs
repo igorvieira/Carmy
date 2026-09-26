@@ -16,7 +16,6 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
-    time::{SystemTime, UNIX_EPOCH},
 };
 use tower::ServiceExt;
 
@@ -26,7 +25,7 @@ impl Tool for Record {
     type Output = usize;
     fn metadata(&self) -> ToolMetadata {
         ToolMetadata {
-            name: "stripe_event".into(),
+            name: "handle_event".into(),
             description: "records an event".into(),
             input_schema: json!({}),
             output_schema: schemars::schema_for!(usize).to_value(),
@@ -63,16 +62,10 @@ impl Enqueue for FakeQueue {
 fn runtime(calls: &Arc<AtomicUsize>) -> Arc<Runtime> {
     Arc::new(Runtime::new().tool(Record(calls.clone())).unwrap())
 }
-fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
-}
-fn stripe_signature(secret: &str, t: u64, body: &str) -> String {
+fn sign(secret: &str, body: &str) -> String {
     let mut mac = Hmac::<sha2::Sha256>::new_from_slice(secret.as_bytes()).unwrap();
-    mac.update(format!("{t}.{body}").as_bytes());
-    format!("t={t},v1={}", hex::encode(mac.finalize().into_bytes()))
+    mac.update(body.as_bytes());
+    format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
 }
 fn deliver(path: &str, header: (&str, String), body: &str) -> Request<Body> {
     Request::post(path)
@@ -86,23 +79,23 @@ async fn json_body(response: axum::response::Response) -> Value {
 }
 
 #[tokio::test]
-async fn a_stripe_redelivery_replays_instead_of_running_twice() {
+async fn a_redelivery_replays_instead_of_running_twice() {
     let calls = Arc::new(AtomicUsize::new(0));
+    let hook = Webhook::hmac_sha256("s3cret", "X-Signature")
+        .tool("handle_event")
+        .event_id("/id");
     let app = webhook_router(
         runtime(&calls),
-        [(
-            "/webhooks/stripe".to_string(),
-            Webhook::stripe("whsec").tool("stripe_event"),
-        )],
+        [("/webhooks/billing".to_string(), hook)],
         None,
     )
     .unwrap();
-    let body = r#"{"id":"evt_42","type":"customer.subscription.created"}"#;
-    let signed = ("stripe-signature", stripe_signature("whsec", now(), body));
+    let body = r#"{"id":"evt_42","type":"subscription.created"}"#;
+    let signed = ("x-signature", sign("s3cret", body));
 
     let first = app
         .clone()
-        .oneshot(deliver("/webhooks/stripe", signed.clone(), body))
+        .oneshot(deliver("/webhooks/billing", signed.clone(), body))
         .await
         .unwrap();
     assert_eq!(first.status(), StatusCode::OK);
@@ -111,7 +104,7 @@ async fn a_stripe_redelivery_replays_instead_of_running_twice() {
 
     let second = app
         .clone()
-        .oneshot(deliver("/webhooks/stripe", signed, body))
+        .oneshot(deliver("/webhooks/billing", signed, body))
         .await
         .unwrap();
     assert_eq!(second.status(), StatusCode::OK);
@@ -122,14 +115,11 @@ async fn a_stripe_redelivery_replays_instead_of_running_twice() {
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1, "the tool ran once");
 
-    // Expired, tampered, unsigned and non-JSON deliveries never reach the tool.
-    let expired = (
-        "stripe-signature",
-        stripe_signature("whsec", now() - 600, body),
-    );
+    // Tampered, unsigned and non-JSON deliveries never reach the tool.
+    let tampered = ("x-signature", sign("s3cret", body));
     let response = app
         .clone()
-        .oneshot(deliver("/webhooks/stripe", expired, body))
+        .oneshot(deliver("/webhooks/billing", tampered, r#"{"id":"evt_43"}"#))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
@@ -137,26 +127,19 @@ async fn a_stripe_redelivery_replays_instead_of_running_twice() {
         json_body(response).await["error"]["code"],
         "WEBHOOK_UNAUTHORIZED"
     );
-    let tampered = ("stripe-signature", stripe_signature("whsec", now(), body));
     let response = app
         .clone()
-        .oneshot(deliver("/webhooks/stripe", tampered, r#"{"id":"evt_43"}"#))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    let response = app
-        .clone()
-        .oneshot(deliver("/webhooks/stripe", ("x-none", "1".into()), body))
+        .oneshot(deliver("/webhooks/billing", ("x-none", "1".into()), body))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     let not_json = "not json";
-    let signed = (
-        "stripe-signature",
-        stripe_signature("whsec", now(), not_json),
-    );
     let response = app
-        .oneshot(deliver("/webhooks/stripe", signed, not_json))
+        .oneshot(deliver(
+            "/webhooks/billing",
+            ("x-signature", sign("s3cret", not_json)),
+            not_json,
+        ))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -168,26 +151,45 @@ async fn a_stripe_redelivery_replays_instead_of_running_twice() {
 }
 
 #[tokio::test]
+async fn without_an_event_id_every_delivery_runs() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let hook = Webhook::shared_secret("X-Token", "t0ken").tool("handle_event");
+    let app = webhook_router(runtime(&calls), [("/hook".to_string(), hook)], None).unwrap();
+    for _ in 0..2 {
+        let response = app
+            .clone()
+            .oneshot(deliver(
+                "/hook",
+                ("x-token", "t0ken".into()),
+                r#"{"id":"same"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
 async fn enqueue_mode_accepts_at_once_and_dedupes_on_the_event_id() {
     let calls = Arc::new(AtomicUsize::new(0));
     let queue = Arc::new(FakeQueue::default());
+    let hook = Webhook::shared_secret("X-Token", "t0ken")
+        .tool("handle_event")
+        .event_id("/update_id")
+        .enqueue();
     let app = webhook_router(
         runtime(&calls),
-        [(
-            "/webhooks/telegram".to_string(),
-            Webhook::telegram("tg-secret")
-                .tool("stripe_event")
-                .enqueue(),
-        )],
+        [("/webhooks/chat".to_string(), hook)],
         Some(queue.clone()),
     )
     .unwrap();
     let body = r#"{"update_id":7,"message":{"text":"/start"}}"#;
-    let token = ("x-telegram-bot-api-secret-token", "tg-secret".to_string());
+    let token = ("x-token", "t0ken".to_string());
     for _ in 0..2 {
         let response = app
             .clone()
-            .oneshot(deliver("/webhooks/telegram", token.clone(), body))
+            .oneshot(deliver("/webhooks/chat", token.clone(), body))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
@@ -198,14 +200,14 @@ async fn enqueue_mode_accepts_at_once_and_dedupes_on_the_event_id() {
     {
         let queued = queue.0.lock().unwrap();
         assert_eq!(queued.len(), 1);
-        assert_eq!(queued["7"].tool, "stripe_event");
+        assert_eq!(queued["7"].tool, "handle_event");
         assert_eq!(queued["7"].arguments["message"]["text"], "/start");
     }
     assert_eq!(calls.load(Ordering::SeqCst), 0, "nothing ran inline");
 
-    let wrong = ("x-telegram-bot-api-secret-token", "guess".to_string());
+    let wrong = ("x-token", "guess".to_string());
     let response = app
-        .oneshot(deliver("/webhooks/telegram", wrong, body))
+        .oneshot(deliver("/webhooks/chat", wrong, body))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
@@ -214,24 +216,18 @@ async fn enqueue_mode_accepts_at_once_and_dedupes_on_the_event_id() {
 #[tokio::test]
 async fn misconfigured_webhooks_fail_at_build_time() {
     let calls = Arc::new(AtomicUsize::new(0));
-    let no_tool = webhook_router(
-        runtime(&calls),
-        [("/w".to_string(), Webhook::stripe("s"))],
-        None,
-    );
+    let hook = || Webhook::shared_secret("X-Token", "t");
+    let no_tool = webhook_router(runtime(&calls), [("/w".to_string(), hook())], None);
     assert_eq!(no_tool.err().unwrap().code, "INVALID_WEBHOOK");
     let unknown = webhook_router(
         runtime(&calls),
-        [("/w".to_string(), Webhook::stripe("s").tool("nope"))],
+        [("/w".to_string(), hook().tool("nope"))],
         None,
     );
     assert!(unknown.err().unwrap().message.contains("unknown tool"));
     let no_queue = webhook_router(
         runtime(&calls),
-        [(
-            "/w".to_string(),
-            Webhook::stripe("s").tool("stripe_event").enqueue(),
-        )],
+        [("/w".to_string(), hook().tool("handle_event").enqueue())],
         None,
     );
     assert!(no_queue.err().unwrap().message.contains("no queue"));

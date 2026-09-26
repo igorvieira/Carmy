@@ -6,7 +6,7 @@
 //!   normalize_offer ─▶ calculate_deal ─▶ validate_deal ─▶ generate_affiliate_link
 //!   ─▶ publish_premium (now) ─▶ publish_public (after the premium window)
 //!   ─▶ publish_twitter (hot deals) ─▶ revalidate_delayed_deal (24 h later)
-//! cleanup_expired_deals (schedule)      membership_event (Stripe webhook, enqueued)
+//! cleanup_expired_deals (schedule)      membership_event (billing webhook, enqueued)
 //! ```
 //!
 //! Sources and publishers are fakes, as in a local deal-engine setup, so the example
@@ -50,18 +50,18 @@ pub struct Settings {
     pub offers: Vec<Offer>,
     /// How long premium members see a deal before the public does.
     pub premium_window: Duration,
-    pub stripe_secret: String,
+    /// Shared with the billing provider, which signs deliveries with HMAC-SHA256.
+    pub webhook_secret: String,
     pub retry: carmy::jobs::RetryPolicy,
 }
 
 impl Settings {
-    /// Fake offers, a 30-second premium window, and `STRIPE_WEBHOOK_SECRET`.
+    /// Fake offers, a 30-second premium window, and `WEBHOOK_SECRET`.
     pub fn from_env() -> Self {
         Self {
             offers: sample_offers(),
             premium_window: Duration::from_secs(30),
-            stripe_secret: std::env::var("STRIPE_WEBHOOK_SECRET")
-                .unwrap_or_else(|_| "whsec_dev".into()),
+            webhook_secret: std::env::var("WEBHOOK_SECRET").unwrap_or_else(|_| "whsec_dev".into()),
             retry: carmy::jobs::RetryPolicy::default(),
         }
     }
@@ -448,7 +448,7 @@ async fn cleanup_expired_deals(State(store): State<Arc<Store>>) -> AgentResult<u
 }
 
 #[derive(Deserialize, JsonSchema)]
-pub struct StripeEvent {
+pub struct BillingEvent {
     pub id: String,
     #[serde(rename = "type")]
     pub kind: String,
@@ -456,14 +456,14 @@ pub struct StripeEvent {
 }
 
 #[carmy::tool(
-    description = "Apply a Stripe subscription event to a membership",
+    description = "Apply a billing subscription event to a membership",
     effect = "write",
     parallel_safe = true,
     register = false
 )]
 async fn membership_event(
     State(store): State<Arc<Store>>,
-    input: StripeEvent,
+    input: BillingEvent,
 ) -> AgentResult<String> {
     let customer = input.data["object"]["customer"]
         .as_str()
@@ -539,9 +539,10 @@ pub fn app_with(settings: Settings, store: Arc<Store>, publishers: Arc<Publisher
             execution_request("cleanup_expired_deals", json!({}))
         })
         .webhook(
-            "/webhooks/stripe",
-            Webhook::stripe(settings.stripe_secret.clone())
+            "/webhooks/billing",
+            Webhook::hmac_sha256(settings.webhook_secret.clone(), "X-Signature")
                 .tool("membership_event")
+                .event_id("/id")
                 .enqueue(),
         )
         .routes(site)
