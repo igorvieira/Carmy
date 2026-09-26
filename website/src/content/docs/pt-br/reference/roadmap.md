@@ -15,6 +15,10 @@ O Carmy está na versão `0.3.0`, e a API é instável durante a série 0.x.
   no stream de eventos.
 - **Transportes:** MCP Streamable HTTP e aprovações via elicitation do MCP.
 - **Stores de idempotência:** adaptadores duráveis (Postgres, Redis) em crates separados.
+- **Fontes de tools:** adaptadores que transformam uma API GraphQL ou OpenAPI existente
+  em tools do Carmy, para que as operações dela ganhem efeitos, confirmação e retries
+  seguros antes de um agente encostar nelas. GraphQL não é um transporte: agentes chamam
+  tools por MCP e HTTP.
 
 ## Fora do escopo
 
