@@ -55,6 +55,7 @@ $ carmy g tool search --effect read   # add a tool: file, test and registration
 $ cargo run              # HTTP on http://127.0.0.1:3000/.well-known/agent
 $ cargo run -- mcp       # the same app as an MCP server over stdio
 $ cargo run -- tools     # print the tool catalog
+$ carmy console          # explore and call the tools in a terminal UI
 $ cargo test
 ```
 

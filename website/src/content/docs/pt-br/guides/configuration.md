@@ -30,6 +30,7 @@ O `run()` escolhe o que fazer pelo primeiro argumento da linha de comando:
 | *(nenhum)* ou `server` | serve HTTP em `address` |
 | `mcp` | serve MCP via stdin/stdout |
 | `tools` | imprime o catálogo de tools em JSON e sai |
+| `console` | serve `carmy-console/1` pelo stdio (veja [Console](/pt-br/guides/console/)) |
 
 ## Builder
 

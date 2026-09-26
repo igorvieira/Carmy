@@ -20,6 +20,9 @@ Carmy requires Rust **1.88** or newer (`rustup update stable`).
 | `carmy new <name> --path <dir>` | depend on a local Carmy checkout instead of crates.io |
 | `carmy generate tool <name> --effect <effect>` | add a tool to the current application |
 | `carmy g tool …` | shorthand for `carmy generate tool` |
+| `carmy console` | explore and call the tools in a terminal UI ([Console](/guides/console/)) |
+| `carmy console --jsonl` | speak `carmy-console/1` on stdio, for agents and scripts |
+| `carmy server` | serve the application over HTTP |
 | `carmy --version` | print the version |
 | `carmy --help` | print usage |
 
@@ -65,5 +68,6 @@ A Carmy application built with `carmy::run()` accepts:
 | `cargo run` or `cargo run -- server` | serve HTTP |
 | `cargo run -- mcp` | serve MCP over stdio |
 | `cargo run -- tools` | print the tool catalog as JSON |
+| `cargo run -- console` | serve `carmy-console/1` on stdio |
 
 The same commands work on the compiled binary: `./target/release/shop mcp`.

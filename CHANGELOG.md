@@ -12,6 +12,18 @@ All notable changes to Carmy are documented here. The format follows
   `src/tools/<name>.rs` and declares it in `src/tools/mod.rs`. The file has typed input
   and output, the `#[carmy::tool]` function and a test, with attributes that follow the
   effect. It never overwrites a file and runs from any directory inside the application.
+- **Console.** `cargo run -- console` serves `carmy-console/1`, a JSON Lines protocol
+  for agents and scripts. It supports `tools`, `describe`, `call` (with `request_id`),
+  and `confirm`/`revoke` scoped to the session, plus text shortcuts. Every call goes
+  through the runtime with all its guarantees. `carmy::console::serve` embeds it.
+- **`carmy console`,** a `ratatui` terminal UI over that protocol:
+  - effect badges and confirmation locks;
+  - arguments prefilled from the input schema;
+  - `request_id` replays;
+  - a confirmation modal and history.
+
+  With `--jsonl`, or without a terminal, it passes the protocol through.
+- `carmy server` runs the application over HTTP from any directory inside it.
 
 ## [0.2.0] - 2026-09-26
 

@@ -82,4 +82,5 @@ timeout_secs = 30            # CARMY_TIMEOUT_SECS
 | `cargo run` or `cargo run -- server` | serve HTTP on the configured address |
 | `cargo run -- mcp` | serve MCP over stdin/stdout |
 | `cargo run -- tools` | print the tool catalog as JSON |
+| `cargo run -- console` or `carmy console` | explore and call the tools (see [Console](/guides/console/)) |
 | `cargo test` | run the tests |

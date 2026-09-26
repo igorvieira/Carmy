@@ -30,6 +30,7 @@ invalid configuration: carmy.toml: unknown field `adress`, expected one of `name
 | *(none)* or `server` | serve HTTP on `address` |
 | `mcp` | serve MCP over stdin/stdout |
 | `tools` | print the tool catalog as JSON and exit |
+| `console` | serve `carmy-console/1` on stdio (see [Console](/guides/console/)) |
 
 ## Builder
 
