@@ -3,8 +3,10 @@
 //! Routes: `GET /.well-known/agent`, `GET /agent/tools`, `POST /agent/execute`
 //! (JSON, or Server-Sent Events with `Accept: text/event-stream`).
 //! Wire DTOs live here; runtime types never serialize directly onto the wire.
-//! [`ServerOptions`] holds the connection limits, timeouts and browser protections.
+//! [`ServerOptions`] holds the connection limits, timeouts and browser protections, and
+//! [`Webhook`] turns provider deliveries into idempotent tool executions.
 mod hardening;
+mod webhooks;
 use axum::{
     Extension, Json, Router,
     extract::{DefaultBodyLimit, FromRequestParts, State, rejection::JsonRejection},
@@ -23,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{convert::Infallible, sync::Arc};
+pub use webhooks::{Enqueue, Webhook, webhook_router};
 
 pub const DISCOVERY_PATH: &str = "/.well-known/agent";
 pub const TOOLS_PATH: &str = "/agent/tools";
@@ -78,7 +81,7 @@ impl ResultDto {
         }
     }
 }
-fn reusable(tool: Option<&ToolMetadata>) -> bool {
+pub(crate) fn reusable(tool: Option<&ToolMetadata>) -> bool {
     tool.is_some_and(|t| t.idempotent && matches!(t.effect, Effect::None | Effect::Read))
 }
 #[derive(Serialize)]
@@ -221,7 +224,7 @@ fn rejection(e: &JsonRejection) -> Response {
     error.details = Some(Box::new(json!({"reason": e.body_text()})));
     (status, Json(json!({ "error": error }))).into_response()
 }
-fn status_of(error: Option<&AgentError>) -> StatusCode {
+pub(crate) fn status_of(error: Option<&AgentError>) -> StatusCode {
     error.map_or(StatusCode::OK, |e| match e.category {
         ErrorCategory::Validation => StatusCode::BAD_REQUEST,
         ErrorCategory::NotFound => StatusCode::NOT_FOUND,

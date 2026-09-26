@@ -64,6 +64,8 @@ pub struct Carmy {
     retry: carmy_jobs::RetryPolicy,
     worker_concurrency: usize,
     schedules: Vec<ScheduleSpec>,
+    #[cfg(feature = "http")]
+    webhooks: Vec<(String, carmy_http::Webhook)>,
 }
 type ScheduleSpec = (
     String,
@@ -91,7 +93,16 @@ impl Carmy {
             retry: carmy_jobs::RetryPolicy::default(),
             worker_concurrency: 4,
             schedules: Vec::new(),
+            #[cfg(feature = "http")]
+            webhooks: Vec::new(),
         }
+    }
+    /// Receive a provider's webhook at `path` as a tool execution; see
+    /// [`carmy_http::Webhook`]. Hooks that `.enqueue()` use the app's job queue.
+    #[cfg(feature = "http")]
+    pub fn webhook(mut self, path: impl Into<String>, hook: carmy_http::Webhook) -> Self {
+        self.webhooks.push((path.into(), hook));
+        self
     }
     /// Where jobs wait. The default is process-local and in memory; use a durable
     /// store in production.
@@ -217,14 +228,26 @@ impl Carmy {
     }
     /// The HTTP router, with the per-request protections from [`Carmy::http`].
     #[cfg(feature = "http")]
-    pub fn router(self) -> Result<axum::Router, Error> {
+    pub fn router(mut self) -> Result<axum::Router, Error> {
         let (name, options) = (self.name.clone(), self.http.clone());
-        Ok(carmy_http::router_with(self.build()?, name, &options))
+        let webhooks = std::mem::take(&mut self.webhooks);
+        let (runtime, jobs) = self.build_with_jobs()?;
+        let mut router = carmy_http::router(runtime.clone(), name);
+        if !webhooks.is_empty() {
+            let queue: Arc<dyn carmy_http::Enqueue> = Arc::new(JobQueue(jobs));
+            router = router.merge(
+                carmy_http::webhook_router(runtime, webhooks, Some(queue))
+                    .map_err(Error::Registration)?,
+            );
+        }
+        Ok(carmy_http::harden(router, &options))
     }
     #[cfg(feature = "http")]
     pub async fn listen(self, address: impl tokio::net::ToSocketAddrs) -> Result<(), Error> {
-        let (name, options) = (self.name.clone(), self.http.clone());
-        Ok(carmy_http::serve_with(self.build()?, address, name, &options).await?)
+        let options = self.http.clone();
+        let router = self.router()?;
+        let listener = tokio::net::TcpListener::bind(address).await?;
+        Ok(carmy_http::serve_listener(listener, router, &options).await?)
     }
     #[cfg(feature = "mcp")]
     pub fn mcp(self) -> Result<carmy_mcp::McpServer, Error> {
@@ -347,4 +370,17 @@ pub fn app() -> Carmy {
 /// Shorthand for `carmy::app().run().await`.
 pub async fn run() -> Result {
     app().run().await
+}
+
+/// The app's job queue as the webhooks' queue.
+#[cfg(feature = "http")]
+struct JobQueue(carmy_jobs::Jobs);
+#[cfg(feature = "http")]
+impl carmy_http::Enqueue for JobQueue {
+    fn enqueue<'a>(
+        &'a self,
+        request: crate::ExecutionRequest,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = AgentResult<String>> + Send + 'a>> {
+        Box::pin(async move { self.0.enqueue(request).await.map(|id| id.0) })
+    }
 }

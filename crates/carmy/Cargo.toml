@@ -39,3 +39,9 @@ toml = { version = "1", default-features = false, features = ["parse", "serde"] 
 
 [dev-dependencies]
 trybuild = "1"
+axum = "0.8"
+hex = "0.4"
+hmac = "0.12"
+http-body-util = "0.1"
+sha2 = "0.10"
+tower = { version = "0.5", features = ["util"] }
