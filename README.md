@@ -280,7 +280,7 @@ jobs.enqueue_after(request, Duration::from_secs(24 * 3600)).await?;
 carmy::app()
     .jobs(Arc::new(PostgresJobStore::new(pool.clone())))            // or the in-memory default
     .schedule("collect", "0 */5 * * * * *", || execution_request("collect_offers", json!({})))
-    .webhook("/webhooks/billing", Webhook::hmac_sha256(secret, "X-Signature").tool("billing_event").event_id("/id").enqueue())
+    .webhook("/webhooks/billing", Webhook::to("billing_event").verify(verify::hmac_sha256(secret, "X-Signature")).event_id("/id").enqueue())
     .ready("database", move || carmy::postgres::ready(pool.clone()))
     .routes(site)
     .run().await   // `cargo run -- worker` runs the jobs
@@ -290,9 +290,10 @@ carmy::app()
   `max_attempts`; uncertain outcomes (`TIMEOUT`, `CANCELLED`, `TOOL_PANIC`) retry only
   idempotent tools and otherwise go to the dead-letter queue, where a person or an agent
   decides.
-- **Webhooks are tools:** the delivery is verified on the raw body (an HMAC-SHA256
-  signature, a shared secret, or your own check), an id read from the payload becomes
-  the `request_id`, and a redelivery replays.
+- **Webhooks are doors into tools:** `Webhook::to(tool).verify(check)`, where the check
+  is a ready HMAC or shared-secret helper or your own function; an id read from the
+  payload becomes the `request_id`, so a redelivery replays. Agents see the webhooks in
+  discovery, never their secrets.
 - **Every execution is audited:** who ran what, when, and how it ended, never the
   arguments or outputs. `carmy console` shows the trail with `audit` and the dead letters
   with `dead`.

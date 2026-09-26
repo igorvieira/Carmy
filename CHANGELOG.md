@@ -20,11 +20,14 @@ All notable changes to Carmy are documented here. The format follows
   SKIP LOCKED`, a transactional outbox through `enqueue_in`), `PostgresIdempotencyStore`
   (atomic reservations shared across instances) and `PostgresAudit`, plus `migrate` and
   `ready`. The contract tests run against a Postgres service in CI.
-- **Webhooks as tools.** `Carmy::webhook(path, Webhook::hmac_sha256(..) |
-  shared_secret(..) | custom(..))` verifies the delivery on the raw body in constant
-  time, takes the `request_id` from a JSON pointer into the payload (`.event_id("/id")`)
-  so redeliveries replay, and runs the tool inline or as a job (`.enqueue()`, answering
-  `202`). Carmy ships no provider-specific integrations.
+- **Webhooks, a door into a tool.** `Carmy::webhook(path, Webhook::to(tool)
+  .verify(check))` checks each delivery with any function of its headers and raw body
+  (`verify::hmac_sha256` and `verify::shared_secret` come ready), takes the
+  `request_id` from a JSON pointer into the payload (`.event_id("/id")`) so redeliveries
+  replay, and runs the tool inline or as a job (`.enqueue()`, answering `202`). A
+  webhook without a check refuses to start unless it says `.unverified()`. Discovery
+  and the console's `webhooks` list them without secrets. Carmy ships no
+  sender-specific integrations.
 - **Audit trail.** `ExecutionSink` receives an `ExecutionRecord` after every execution,
   replays and rejections included, never with arguments or outputs. Every app keeps the
   latest records in memory; `.sink(..)` adds durable ones. The console gains `audit` and

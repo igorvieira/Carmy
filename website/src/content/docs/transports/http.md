@@ -22,7 +22,9 @@ are limited to 1 MiB.
 ```
 
 `tools_version` changes only when the catalog changes, so agents can cache the catalog
-instead of downloading it again.
+instead of downloading it again. An app with [webhooks](/guides/webhooks/) adds
+`"webhooks"` to `capabilities` and lists each one (path, tool, mode, identity pointer),
+never with its secret.
 
 ## `GET /agent/tools`
 

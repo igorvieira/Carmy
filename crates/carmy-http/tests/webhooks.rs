@@ -3,7 +3,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use carmy_core::*;
-use carmy_http::{Enqueue, Webhook, webhook_router};
+use carmy_http::{Enqueue, Webhook, router_with_webhooks, verify};
 use carmy_runtime::Runtime;
 use hmac::{Hmac, Mac};
 use http_body_util::BodyExt;
@@ -59,6 +59,14 @@ impl Enqueue for FakeQueue {
     }
 }
 
+fn mount(
+    calls: &Arc<AtomicUsize>,
+    hooks: Vec<(&str, Webhook)>,
+    queue: Option<Arc<dyn Enqueue>>,
+) -> Result<axum::Router, AgentError> {
+    let hooks = hooks.into_iter().map(|(p, h)| (p.to_string(), h));
+    router_with_webhooks(runtime(calls), "test", hooks, queue)
+}
 fn runtime(calls: &Arc<AtomicUsize>) -> Arc<Runtime> {
     Arc::new(Runtime::new().tool(Record(calls.clone())).unwrap())
 }
@@ -81,15 +89,10 @@ async fn json_body(response: axum::response::Response) -> Value {
 #[tokio::test]
 async fn a_redelivery_replays_instead_of_running_twice() {
     let calls = Arc::new(AtomicUsize::new(0));
-    let hook = Webhook::hmac_sha256("s3cret", "X-Signature")
-        .tool("handle_event")
+    let hook = Webhook::to("handle_event")
+        .verify(verify::hmac_sha256("s3cret", "X-Signature"))
         .event_id("/id");
-    let app = webhook_router(
-        runtime(&calls),
-        [("/webhooks/billing".to_string(), hook)],
-        None,
-    )
-    .unwrap();
+    let app = mount(&calls, vec![("/webhooks/billing", hook)], None).unwrap();
     let body = r#"{"id":"evt_42","type":"subscription.created"}"#;
     let signed = ("x-signature", sign("s3cret", body));
 
@@ -153,8 +156,8 @@ async fn a_redelivery_replays_instead_of_running_twice() {
 #[tokio::test]
 async fn without_an_event_id_every_delivery_runs() {
     let calls = Arc::new(AtomicUsize::new(0));
-    let hook = Webhook::shared_secret("X-Token", "t0ken").tool("handle_event");
-    let app = webhook_router(runtime(&calls), [("/hook".to_string(), hook)], None).unwrap();
+    let hook = Webhook::to("handle_event").verify(verify::shared_secret("X-Token", "t0ken"));
+    let app = mount(&calls, vec![("/hook", hook)], None).unwrap();
     for _ in 0..2 {
         let response = app
             .clone()
@@ -174,16 +177,11 @@ async fn without_an_event_id_every_delivery_runs() {
 async fn enqueue_mode_accepts_at_once_and_dedupes_on_the_event_id() {
     let calls = Arc::new(AtomicUsize::new(0));
     let queue = Arc::new(FakeQueue::default());
-    let hook = Webhook::shared_secret("X-Token", "t0ken")
-        .tool("handle_event")
+    let hook = Webhook::to("handle_event")
+        .verify(verify::shared_secret("X-Token", "t0ken"))
         .event_id("/update_id")
         .enqueue();
-    let app = webhook_router(
-        runtime(&calls),
-        [("/webhooks/chat".to_string(), hook)],
-        Some(queue.clone()),
-    )
-    .unwrap();
+    let app = mount(&calls, vec![("/webhooks/chat", hook)], Some(queue.clone())).unwrap();
     let body = r#"{"update_id":7,"message":{"text":"/start"}}"#;
     let token = ("x-token", "t0ken".to_string());
     for _ in 0..2 {
@@ -216,19 +214,80 @@ async fn enqueue_mode_accepts_at_once_and_dedupes_on_the_event_id() {
 #[tokio::test]
 async fn misconfigured_webhooks_fail_at_build_time() {
     let calls = Arc::new(AtomicUsize::new(0));
-    let hook = || Webhook::shared_secret("X-Token", "t");
-    let no_tool = webhook_router(runtime(&calls), [("/w".to_string(), hook())], None);
-    assert_eq!(no_tool.err().unwrap().code, "INVALID_WEBHOOK");
-    let unknown = webhook_router(
-        runtime(&calls),
-        [("/w".to_string(), hook().tool("nope"))],
-        None,
+    let ok = || Webhook::to("handle_event").verify(verify::shared_secret("X-Token", "t"));
+    let error = |hooks: Vec<(&str, Webhook)>| {
+        let error = mount(&calls, hooks, None).expect_err("an invalid webhook");
+        assert_eq!(error.code, "INVALID_WEBHOOK");
+        error.message
+    };
+    assert!(error(vec![("/w", Webhook::to("nope").unverified())]).contains("unknown tool"));
+    assert!(error(vec![("/w", Webhook::to("handle_event"))]).contains("no verification"));
+    assert!(error(vec![("/w", ok().enqueue())]).contains("no queue"));
+    assert!(error(vec![("w", ok())]).contains("start with"));
+    assert!(error(vec![("/agent/execute", ok())]).contains("taken"));
+    assert!(error(vec![("/w", ok()), ("/w", ok())]).contains("taken"));
+    // Unverified on purpose is allowed.
+    assert!(
+        mount(
+            &calls,
+            vec![("/w", Webhook::to("handle_event").unverified())],
+            None
+        )
+        .is_ok()
     );
-    assert!(unknown.err().unwrap().message.contains("unknown tool"));
-    let no_queue = webhook_router(
-        runtime(&calls),
-        [("/w".to_string(), hook().tool("handle_event").enqueue())],
-        None,
+}
+
+#[tokio::test]
+async fn agents_discover_the_webhooks_without_their_secrets() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let hook = Webhook::to("handle_event")
+        .verify(verify::hmac_sha256("s3cret", "X-Signature"))
+        .event_id("/id")
+        .enqueue();
+    let queue: Arc<dyn Enqueue> = Arc::new(FakeQueue::default());
+    let app = mount(&calls, vec![("/webhooks/billing", hook)], Some(queue)).unwrap();
+    let response = app
+        .oneshot(
+            Request::get("/.well-known/agent")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let discovery = json_body(response).await;
+    assert!(
+        discovery["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("webhooks"))
     );
-    assert!(no_queue.err().unwrap().message.contains("no queue"));
+    assert_eq!(
+        discovery["webhooks"],
+        json!([{
+            "path": "/webhooks/billing",
+            "tool": "handle_event",
+            "mode": "enqueue",
+            "event_id": "/id",
+            "verified": true,
+        }])
+    );
+    assert!(!discovery.to_string().contains("s3cret"));
+
+    // Without webhooks, discovery is unchanged.
+    let plain = carmy_http::router(runtime(&calls), "test")
+        .oneshot(
+            Request::get("/.well-known/agent")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let plain = json_body(plain).await;
+    assert!(plain.get("webhooks").is_none());
+    assert!(
+        !plain["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("webhooks"))
+    );
 }

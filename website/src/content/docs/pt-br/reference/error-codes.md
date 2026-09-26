@@ -42,7 +42,7 @@ Estes são retornados por `build()`, `run()` e `listen()` como `carmy::Error::Re
 | `INVALID_SCHEMA` | um schema de entrada ou de saída não é um JSON Schema válido |
 | `MISSING_STATE` | uma tool precisa de um `State<T>` que nunca foi registrado |
 | `INVALID_SCHEDULE` | uma expressão de `.schedule(..)` não é cron de sete campos |
-| `INVALID_WEBHOOK` | um `.webhook(..)` sem tool, com tool desconhecida, ou `.enqueue()` sem fila |
+| `INVALID_WEBHOOK` | um `.webhook(..)` sem `.verify(..)` nem `.unverified()`, com tool desconhecida, `.enqueue()` sem fila, ou caminho ocupado |
 
 ## Jobs, webhooks e readiness
 
@@ -53,7 +53,7 @@ Estes são retornados por `build()`, `run()` e `listen()` como `carmy::Error::Re
 | `EXECUTION_UNCERTAIN` | `conflict` | a última tentativa de um job estourou o prazo, foi cancelada ou entrou em pânico numa tool não idempotente; ele vai para a DLQ |
 | `STORE_ERROR` | `internal` | um store Postgres não conseguiu ler ou escrever; retryable |
 | `DATABASE_UNAVAILABLE` | `capacity` | o `carmy::postgres::ready` não obteve resposta do pool |
-| `WEBHOOK_UNAUTHORIZED` | `permission` | a assinatura ou o token da entrega está ausente, expirado ou errado (HTTP 401) |
+| `WEBHOOK_UNAUTHORIZED` | `permission` | a entrega não passou na verificação `.verify(..)` do webhook (HTTP 401) |
 | `READY_TIMEOUT` | `timeout` | um check de readiness levou mais de 5 segundos |
 | `WORKER_DOWN` | `capacity` | o `.require_worker(within)` não viu um worker marcar a fila a tempo |
 | `UNAVAILABLE` | `not_found` | o `audit` ou `dead` do console sem trilha ou fila anexadas |

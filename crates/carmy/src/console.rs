@@ -16,10 +16,11 @@
 //! {"id":5,"op":"revoke","tool":"delete"}
 //! {"id":6,"op":"audit","limit":20}                        -> the latest execution records
 //! {"id":7,"op":"dead","limit":20}                         -> jobs in the dead-letter queue
+//! {"id":8,"op":"webhooks"}                                 -> the webhooks and the tools they lead to
 //! ```
 //!
 //! A line that does not start with `{` is read as a text command (`tools`,
-//! `describe <tool>`, `confirm <tool>`, `revoke <tool>`, `audit [n]`, `dead [n]`, `help`, `exit`, or
+//! `describe <tool>`, `confirm <tool>`, `revoke <tool>`, `audit [n]`, `dead [n]`, `webhooks`, `help`, `exit`, or
 //! `<tool> [json] [--request-id <id>]`); the answer is still JSON. Unstable during 0.x.
 use crate::{
     AgentContext, AgentError, CancellationToken, ErrorCategory, ExecutionEvent, ExecutionStatus,
@@ -33,11 +34,13 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 /// Protocol name sent in the `ready` event.
 pub const PROTOCOL: &str = "carmy-console/1";
 
-/// What the console can show beyond the tools: the audit trail and the job queue.
+/// What the console can show beyond the tools: the audit trail, the job queue and the
+/// webhooks (as `Webhook::describe` renders them).
 #[derive(Default)]
 pub struct Extras {
     pub audit: Option<Arc<InMemoryAudit>>,
     pub jobs: Option<crate::jobs::Jobs>,
+    pub webhooks: Vec<Value>,
 }
 
 /// Serve the protocol until `input` ends or an `exit` request arrives.
@@ -142,6 +145,7 @@ impl Session {
                 Some(tool) => Ok(self.call(tool, &request).await),
                 None => Err(invalid("`call` needs a `tool`")),
             },
+            Some("webhooks") => Ok(json!({ "webhooks": self.extras.webhooks })),
             Some("audit") => match &self.extras.audit {
                 Some(audit) => Ok(json!({ "executions": audit.recent(limit(&request)) })),
                 None => Err(unavailable("no audit trail is attached to this console")),
@@ -274,9 +278,10 @@ fn help() -> Value {
             "revoke": "withdraw confirm:<tool>; needs `tool`",
             "audit": "the latest execution records, newest first; optional `limit`",
             "dead": "jobs in the dead-letter queue; optional `limit`",
+            "webhooks": "the webhooks: path, tool, mode and identity pointer",
             "exit": "end the session",
         },
-        "text": "tools | describe <tool> | confirm <tool> | revoke <tool> | audit [n] | dead [n] | help | exit | <tool> [json] [--request-id <id>]",
+        "text": "tools | describe <tool> | confirm <tool> | revoke <tool> | audit [n] | dead [n] | webhooks | help | exit | <tool> [json] [--request-id <id>]",
     })
 }
 
@@ -297,7 +302,7 @@ fn parse(line: &str) -> Result<Value, AgentError> {
         }
     };
     match word {
-        "tools" | "help" | "exit" | "quit" => {
+        "tools" | "webhooks" | "help" | "exit" | "quit" => {
             Ok(json!({ "op": if word == "quit" { "exit" } else { word } }))
         }
         "describe" | "confirm" | "revoke" => named(word),

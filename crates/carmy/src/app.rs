@@ -160,8 +160,8 @@ impl Carmy {
     pub fn audit(&self) -> Arc<carmy_runtime::InMemoryAudit> {
         self.audit.clone()
     }
-    /// Receive a provider's webhook at `path` as a tool execution; see
-    /// [`carmy_http::Webhook`]. Hooks that `.enqueue()` use the app's job queue.
+    /// A door into a tool: deliveries to `path` are verified and run (or enqueued) as
+    /// executions of the webhook's tool; see [`carmy_http::Webhook`].
     #[cfg(feature = "http")]
     pub fn webhook(mut self, path: impl Into<String>, hook: carmy_http::Webhook) -> Self {
         self.webhooks.push((path.into(), hook));
@@ -324,17 +324,12 @@ impl Carmy {
                 }),
             ));
         }
-        let mut router =
-            carmy_http::router(runtime.clone(), name).merge(carmy_http::health_router(readiness));
+        let queue: Arc<dyn carmy_http::Enqueue> = Arc::new(JobQueue(jobs.clone()));
+        let mut router = carmy_http::router_with_webhooks(runtime, name, webhooks, Some(queue))
+            .map_err(Error::Registration)?
+            .merge(carmy_http::health_router(readiness));
         for own in routes {
             router = router.merge(own);
-        }
-        if !webhooks.is_empty() {
-            let queue: Arc<dyn carmy_http::Enqueue> = Arc::new(JobQueue(jobs.clone()));
-            router = router.merge(
-                carmy_http::webhook_router(runtime, webhooks, Some(queue))
-                    .map_err(Error::Registration)?,
-            );
         }
         Ok((carmy_http::harden(router, &options), jobs))
     }
@@ -384,11 +379,20 @@ impl Carmy {
             Some("console") => {
                 let name = self.name.clone();
                 let audit = self.audit.clone();
+                #[cfg(feature = "http")]
+                let webhooks = self
+                    .webhooks
+                    .iter()
+                    .map(|(path, hook)| hook.describe(path))
+                    .collect();
+                #[cfg(not(feature = "http"))]
+                let webhooks = Vec::new();
                 let input = tokio::io::BufReader::new(tokio::io::stdin());
                 let (runtime, jobs) = self.build_with_jobs()?;
                 let extras = crate::console::Extras {
                     audit: Some(audit),
                     jobs: Some(jobs),
+                    webhooks,
                 };
                 Ok(
                     crate::console::serve_with(runtime, &name, extras, input, tokio::io::stdout())

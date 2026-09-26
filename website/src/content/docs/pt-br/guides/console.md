@@ -86,6 +86,9 @@ terminal. Cada mensagem é um objeto JSON por linha. A primeira linha é:
 | `{"id":3,"op":"call","tool":"create_order","arguments":{"sku":"KB-01"},"request_id":"r1"}` | o mesmo corpo do `POST /agent/execute`, mais `replayed` e `duration_ms` |
 | `{"id":4,"op":"confirm","tool":"cancel_order"}` | concede `confirm:cancel_order` nesta sessão |
 | `{"id":5,"op":"revoke","tool":"cancel_order"}` | retira a concessão |
+| `{"id":6,"op":"audit","limit":20}` | os últimos [registros de execução](/pt-br/guides/audit/), mais novos primeiro |
+| `{"id":7,"op":"dead","limit":20}` | os [jobs](/pt-br/guides/jobs/) na fila de dead letters |
+| `{"id":8,"op":"webhooks"}` | os [webhooks](/pt-br/guides/webhooks/): caminho, tool, modo e pointer de identidade |
 | `{"op":"help"}` / `{"op":"exit"}` | lista as operações / encerra a sessão |
 
 Toda resposta repete o `id` e traz `ok`:

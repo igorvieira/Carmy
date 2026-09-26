@@ -1,10 +1,10 @@
-//! Webhooks as tool executions. A delivery is verified on the raw body, given an
+//! Webhooks: a door into a tool. A delivery is verified by the app's check, given an
 //! identity read from the payload as its `request_id`, and then executed (or enqueued)
-//! like any other request. Redeliveries therefore replay instead of running twice.
+//! like any other request, so redeliveries replay instead of running twice.
 //!
-//! Verification is generic: an HMAC-SHA256 signature in a header, a shared secret in a
-//! header, or any check the app supplies. Provider conventions live in the app.
-use crate::{BODY_LIMIT, ResultDto, reusable, status_of};
+//! Carmy knows no sender. [`verify`] holds two common checks; anything else is a
+//! closure over the headers and the raw body.
+use crate::{BODY_LIMIT, DISCOVERY_PATH, EXECUTE_PATH, ResultDto, TOOLS_PATH, reusable, status_of};
 use axum::{
     Json, Router,
     body::Bytes,
@@ -15,14 +15,10 @@ use axum::{
 };
 use carmy_core::{AgentError, AgentResult, ErrorCategory, ExecutionRequest};
 use carmy_runtime::{Runtime, execution_request};
-use hmac::{Hmac, Mac};
 use serde_json::{Value, json};
-use sha2::Sha256;
 use std::{future::Future, pin::Pin, sync::Arc};
-use subtle::ConstantTimeEq;
 
-type HmacSha256 = Hmac<Sha256>;
-type CustomCheck = Arc<dyn Fn(&HeaderMap, &[u8]) -> bool + Send + Sync>;
+type Check = Arc<dyn Fn(&Delivery) -> bool + Send + Sync>;
 
 /// Something that can run a request later; the facade wires the app's `Jobs` here.
 pub trait Enqueue: Send + Sync {
@@ -32,62 +28,96 @@ pub trait Enqueue: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = AgentResult<String>> + Send + 'a>>;
 }
 
-#[derive(Clone)]
-enum Verifier {
-    /// A header carrying hex HMAC-SHA256 of the body, optionally prefixed `sha256=`.
-    Hmac { secret: Arc<str>, header: Arc<str> },
-    /// A header whose value equals a shared secret.
-    SharedSecret { header: Arc<str>, secret: Arc<str> },
-    /// Any check the app supplies.
-    Custom(CustomCheck),
+/// What a verification check sees: the request headers and the raw body, before any
+/// parsing.
+pub struct Delivery<'a> {
+    pub headers: &'a HeaderMap,
+    pub body: &'a [u8],
 }
 
-/// How one endpoint verifies deliveries and which tool receives them.
+impl Delivery<'_> {
+    /// A header as text, if present and valid UTF-8.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers.get(name).and_then(|v| v.to_str().ok())
+    }
+}
+
+/// Common checks for [`Webhook::verify`].
+pub mod verify {
+    use super::Delivery;
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    use subtle::ConstantTimeEq;
+
+    /// `header` holds the hex HMAC-SHA256 of the body, with or without `sha256=`.
+    pub fn hmac_sha256(
+        secret: impl Into<String>,
+        header: impl Into<String>,
+    ) -> impl Fn(&Delivery) -> bool + Send + Sync + 'static {
+        let (secret, header) = (secret.into(), header.into().to_ascii_lowercase());
+        move |delivery| {
+            let Some(given) = delivery.header(&header) else {
+                return false;
+            };
+            let given = given.strip_prefix("sha256=").unwrap_or(given);
+            let mut mac =
+                Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("any key length");
+            mac.update(delivery.body);
+            let expected = mac.finalize().into_bytes();
+            hex::decode(given.trim()).is_ok_and(|bytes| bool::from(bytes.ct_eq(&expected)))
+        }
+    }
+
+    /// `header` equals a secret shared with the sender.
+    pub fn shared_secret(
+        header: impl Into<String>,
+        secret: impl Into<String>,
+    ) -> impl Fn(&Delivery) -> bool + Send + Sync + 'static {
+        let (header, secret) = (header.into().to_ascii_lowercase(), secret.into());
+        move |delivery| {
+            delivery
+                .header(&header)
+                .is_some_and(|given| bool::from(given.as_bytes().ct_eq(secret.as_bytes())))
+        }
+    }
+}
+
+/// Where one webhook leads and how its deliveries are checked.
 #[derive(Clone)]
 pub struct Webhook {
-    verifier: Verifier,
-    tool: Option<String>,
+    tool: String,
+    check: Option<Check>,
+    unverified: bool,
     event_id: Option<String>,
     enqueue: bool,
 }
 
 impl Webhook {
-    /// The body signed with HMAC-SHA256, hex-encoded in `header`, with or without a
-    /// `sha256=` prefix.
-    pub fn hmac_sha256(secret: impl Into<String>, header: impl Into<String>) -> Self {
-        Self::new(Verifier::Hmac {
-            secret: secret.into().into(),
-            header: header.into().to_ascii_lowercase().into(),
-        })
-    }
-    /// `header` carries a secret shared with the sender.
-    pub fn shared_secret(header: impl Into<String>, secret: impl Into<String>) -> Self {
-        Self::new(Verifier::SharedSecret {
-            header: header.into().to_ascii_lowercase().into(),
-            secret: secret.into().into(),
-        })
-    }
-    /// Any other scheme: `check` receives the headers and the raw body and returns
-    /// whether the delivery is authentic. Compare secrets in constant time.
-    pub fn custom(check: impl Fn(&HeaderMap, &[u8]) -> bool + Send + Sync + 'static) -> Self {
-        Self::new(Verifier::Custom(Arc::new(check)))
-    }
-    fn new(verifier: Verifier) -> Self {
+    /// A webhook whose verified payload becomes the input of `tool`.
+    pub fn to(tool: impl Into<String>) -> Self {
         Self {
-            verifier,
-            tool: None,
+            tool: tool.into(),
+            check: None,
+            unverified: false,
             event_id: None,
             enqueue: false,
         }
     }
-    /// The tool that receives the verified payload as its input. Required.
-    pub fn tool(mut self, name: impl Into<String>) -> Self {
-        self.tool = Some(name.into());
+    /// How to tell an authentic delivery: a [`verify`] helper or any closure. Compare
+    /// secrets in constant time. Required unless [`Webhook::unverified`].
+    pub fn verify(mut self, check: impl Fn(&Delivery) -> bool + Send + Sync + 'static) -> Self {
+        self.check = Some(Arc::new(check));
+        self
+    }
+    /// Accept every delivery. Only for senders already authenticated upstream, such as
+    /// a private network or a gateway.
+    pub fn unverified(mut self) -> Self {
+        self.unverified = true;
         self
     }
     /// A JSON pointer (`/id`, `/event/id`) to the delivery's identity, used as the
     /// `request_id` so redeliveries replay. Strings and numbers are accepted. Without
-    /// it, or when the pointer finds nothing, deliveries are not deduplicated.
+    /// it, or when the pointer finds nothing, every delivery runs.
     pub fn event_id(mut self, pointer: impl Into<String>) -> Self {
         self.event_id = Some(pointer.into());
         self
@@ -98,33 +128,31 @@ impl Webhook {
         self.enqueue = true;
         self
     }
-    /// Verify one delivery. Public so hosts with their own routes can reuse it.
-    pub fn verify(&self, headers: &HeaderMap, body: &[u8]) -> Result<(), AgentError> {
-        let text = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
-        let ok = match &self.verifier {
-            Verifier::Hmac { secret, header } => {
-                let Some(given) = text(header) else {
-                    return Err(unauthorized(format!("Missing {header} header")));
-                };
-                let given = given.strip_prefix("sha256=").unwrap_or(given);
-                let mut mac =
-                    HmacSha256::new_from_slice(secret.as_bytes()).expect("any key length");
-                mac.update(body);
-                hex_eq(given, &mac.finalize().into_bytes())
-            }
-            Verifier::SharedSecret { header, secret } => {
-                let Some(given) = text(header) else {
-                    return Err(unauthorized(format!("Missing {header} header")));
-                };
-                bool::from(given.as_bytes().ct_eq(secret.as_bytes()))
-            }
-            Verifier::Custom(check) => check(headers, body),
+    /// Check one delivery. Public so hosts with their own routes can reuse it.
+    pub fn check(&self, headers: &HeaderMap, body: &[u8]) -> Result<(), AgentError> {
+        let authentic = match &self.check {
+            Some(check) => check(&Delivery { headers, body }),
+            None => self.unverified,
         };
-        if ok {
+        if authentic {
             Ok(())
         } else {
-            Err(unauthorized("Webhook signature does not match"))
+            Err(AgentError::new(
+                "WEBHOOK_UNAUTHORIZED",
+                "The delivery did not pass the webhook's verification",
+                ErrorCategory::Permission,
+            ))
         }
+    }
+    /// What agents see in discovery and the console. Never the secret.
+    pub fn describe(&self, path: &str) -> Value {
+        json!({
+            "path": path,
+            "tool": self.tool,
+            "mode": if self.enqueue { "enqueue" } else { "inline" },
+            "event_id": self.event_id,
+            "verified": self.check.is_some(),
+        })
     }
     fn identity(&self, payload: &Value) -> Option<String> {
         match payload.pointer(self.event_id.as_deref()?)? {
@@ -135,49 +163,53 @@ impl Webhook {
     }
 }
 
-fn hex_eq(given: &str, expected: &[u8]) -> bool {
-    hex::decode(given.trim()).is_ok_and(|bytes| bool::from(bytes.ct_eq(expected)))
-}
-fn unauthorized(message: impl Into<String>) -> AgentError {
-    AgentError::new("WEBHOOK_UNAUTHORIZED", message, ErrorCategory::Permission)
-}
-
 #[derive(Clone)]
 struct WebhookState {
     runtime: Arc<Runtime>,
     enqueuer: Option<Arc<dyn Enqueue>>,
     hook: Arc<Webhook>,
-    tool: String,
 }
 
-/// A router with one `POST` route per webhook. Merge it with [`crate::router`] (or any
-/// router) and apply [`crate::harden`] to the result. `enqueuer` is required by hooks
-/// that [`Webhook::enqueue`]; without one they fail at build time.
-pub fn webhook_router(
-    runtime: Arc<Runtime>,
-    hooks: impl IntoIterator<Item = (String, Webhook)>,
+/// One `POST` route per webhook, checked before anything is mounted: a tool must exist,
+/// a check or [`Webhook::unverified`] must be set, a queue must exist for
+/// [`Webhook::enqueue`], and paths must be free.
+pub(crate) fn webhook_routes(
+    runtime: &Arc<Runtime>,
+    hooks: Vec<(String, Webhook)>,
     enqueuer: Option<Arc<dyn Enqueue>>,
 ) -> Result<Router, AgentError> {
     let mut router = Router::new();
+    let mut seen = std::collections::HashSet::new();
     for (path, hook) in hooks {
-        let Some(tool) = hook.tool.clone() else {
-            return Err(invalid(format!("webhook `{path}` has no tool")));
-        };
-        if runtime.metadata(&tool).is_none() {
-            return Err(invalid(format!(
-                "webhook `{path}` targets unknown tool `{tool}`"
-            )));
+        let fail = |why: &str| Err(invalid(format!("webhook `{path}` {why}")));
+        if !path.starts_with('/') {
+            return fail("must start with `/`");
+        }
+        if [
+            DISCOVERY_PATH,
+            TOOLS_PATH,
+            EXECUTE_PATH,
+            crate::HEALTH_PATH,
+            crate::READY_PATH,
+        ]
+        .contains(&path.as_str())
+            || !seen.insert(path.clone())
+        {
+            return fail("uses a path that is already taken");
+        }
+        if runtime.metadata(&hook.tool).is_none() {
+            return fail(&format!("targets unknown tool `{}`", hook.tool));
+        }
+        if hook.check.is_none() && !hook.unverified {
+            return fail("has no verification; add .verify(..), or .unverified() on purpose");
         }
         if hook.enqueue && enqueuer.is_none() {
-            return Err(invalid(format!(
-                "webhook `{path}` enqueues but no queue is configured"
-            )));
+            return fail("enqueues but no queue is configured");
         }
         let state = WebhookState {
             runtime: runtime.clone(),
             enqueuer: enqueuer.clone(),
             hook: Arc::new(hook),
-            tool,
         };
         router = router.route(&path, post(receive).with_state(state));
     }
@@ -188,7 +220,7 @@ fn invalid(message: String) -> AgentError {
 }
 
 async fn receive(State(state): State<WebhookState>, headers: HeaderMap, body: Bytes) -> Response {
-    if let Err(error) = state.hook.verify(&headers, &body) {
+    if let Err(error) = state.hook.check(&headers, &body) {
         return (StatusCode::UNAUTHORIZED, Json(json!({ "error": error }))).into_response();
     }
     let payload: Value = match serde_json::from_slice(&body) {
@@ -203,7 +235,7 @@ async fn receive(State(state): State<WebhookState>, headers: HeaderMap, body: By
             return (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response();
         }
     };
-    let mut request = execution_request(state.tool.clone(), payload);
+    let mut request = execution_request(state.hook.tool.clone(), payload);
     request.request_id = state.hook.identity(&request.arguments);
     let no_store = [(header::CACHE_CONTROL, "no-store")];
     if state.hook.enqueue {
@@ -232,53 +264,64 @@ async fn receive(State(state): State<WebhookState>, headers: HeaderMap, body: By
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hmac::{Hmac, Mac};
 
     fn sign(secret: &str, body: &[u8]) -> String {
-        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+        let mut mac = Hmac::<sha2::Sha256>::new_from_slice(secret.as_bytes()).unwrap();
         mac.update(body);
         hex::encode(mac.finalize().into_bytes())
     }
 
     #[test]
     fn hmac_accepts_plain_and_prefixed_hex_and_rejects_the_rest() {
-        let hook = Webhook::hmac_sha256("s3cret", "X-Signature");
+        let hook = Webhook::to("t").verify(verify::hmac_sha256("s3cret", "X-Signature"));
         let body = b"{}";
         let mut headers = HeaderMap::new();
         headers.insert(
             "x-signature",
             format!("sha256={}", sign("s3cret", body)).parse().unwrap(),
         );
-        assert!(hook.verify(&headers, body).is_ok());
+        assert!(hook.check(&headers, body).is_ok());
         headers.insert("x-signature", sign("s3cret", body).parse().unwrap());
-        assert!(hook.verify(&headers, body).is_ok());
-        assert!(hook.verify(&headers, b"{\"x\":1}").is_err(), "tampered");
+        assert!(hook.check(&headers, body).is_ok());
+        assert!(hook.check(&headers, b"{\"x\":1}").is_err(), "tampered");
         headers.insert("x-signature", sign("other", body).parse().unwrap());
-        assert!(hook.verify(&headers, body).is_err(), "wrong secret");
+        assert!(hook.check(&headers, body).is_err(), "wrong secret");
         headers.insert("x-signature", "not-hex".parse().unwrap());
-        assert!(hook.verify(&headers, body).is_err());
-        assert!(hook.verify(&HeaderMap::new(), body).is_err(), "missing");
+        assert!(hook.check(&headers, body).is_err());
+        assert!(hook.check(&HeaderMap::new(), body).is_err(), "missing");
     }
 
     #[test]
-    fn shared_secret_and_custom_checks() {
-        let hook = Webhook::shared_secret("X-Token", "t0ken");
+    fn shared_secrets_closures_and_unverified() {
+        let hook = Webhook::to("t").verify(verify::shared_secret("X-Token", "t0ken"));
         let mut headers = HeaderMap::new();
         headers.insert("x-token", "t0ken".parse().unwrap());
-        assert!(hook.verify(&headers, b"").is_ok());
+        assert!(hook.check(&headers, b"").is_ok());
         headers.insert("x-token", "guess".parse().unwrap());
-        assert!(hook.verify(&headers, b"").is_err());
+        assert!(hook.check(&headers, b"").is_err());
 
-        let hook =
-            Webhook::custom(|headers, body| headers.contains_key("x-ok") && !body.is_empty());
+        let hook = Webhook::to("t").verify(|d| d.header("x-ok").is_some() && !d.body.is_empty());
         let mut headers = HeaderMap::new();
-        assert!(hook.verify(&headers, b"{}").is_err());
+        assert!(hook.check(&headers, b"{}").is_err());
         headers.insert("x-ok", "1".parse().unwrap());
-        assert!(hook.verify(&headers, b"{}").is_ok());
+        assert!(hook.check(&headers, b"{}").is_ok());
+
+        assert!(
+            Webhook::to("t").check(&HeaderMap::new(), b"").is_err(),
+            "no check, no entry"
+        );
+        assert!(
+            Webhook::to("t")
+                .unverified()
+                .check(&HeaderMap::new(), b"")
+                .is_ok()
+        );
     }
 
     #[test]
     fn identity_comes_from_a_json_pointer() {
-        let hook = Webhook::custom(|_, _| true).event_id("/event/id");
+        let hook = Webhook::to("t").event_id("/event/id");
         assert_eq!(
             hook.identity(&json!({"event": {"id": "e1"}})).as_deref(),
             Some("e1")
@@ -289,9 +332,26 @@ mod tests {
         );
         assert_eq!(hook.identity(&json!({"event": {"id": ""}})), None);
         assert_eq!(hook.identity(&json!({})), None);
+        assert_eq!(Webhook::to("t").identity(&json!({"id": "x"})), None);
+    }
+
+    #[test]
+    fn descriptions_never_carry_secrets() {
+        let hook = Webhook::to("billing_event")
+            .verify(verify::hmac_sha256("s3cret", "X-Signature"))
+            .event_id("/id")
+            .enqueue();
+        let described = hook.describe("/webhooks/billing");
         assert_eq!(
-            Webhook::custom(|_, _| true).identity(&json!({"id": "x"})),
-            None
+            described,
+            json!({
+                "path": "/webhooks/billing",
+                "tool": "billing_event",
+                "mode": "enqueue",
+                "event_id": "/id",
+                "verified": true,
+            })
         );
+        assert!(!described.to_string().contains("s3cret"));
     }
 }

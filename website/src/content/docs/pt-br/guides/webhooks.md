@@ -1,91 +1,90 @@
 ---
 title: Webhooks
-description: "Receba entregas assinadas de qualquer remetente como execuções idempotentes de tools."
+description: "Uma porta para uma tool: entregas verificadas de qualquer remetente, rodadas como execuções idempotentes."
 sidebar:
   order: 14
 ---
 
-Um webhook é uma tool com um remetente do outro lado. O Carmy verifica a entrega no corpo
-bruto, lê a identidade dela no payload como `request_id` e roda a tool, então uma
-reentrega **faz replay** em vez de rodar duas vezes.
+Um webhook é uma porta para uma tool. O Carmy verifica a entrega, lê a identidade dela no
+payload como `request_id` e roda a tool, então uma reentrega **faz replay** em vez de
+rodar duas vezes. O Carmy não conhece remetente nenhum: você diz como verificar uma
+entrega.
 
 ```rust
-use carmy::http::Webhook;
+use carmy::http::{Webhook, verify};
 
 carmy::app()
-    .webhook("/webhooks/billing", Webhook::hmac_sha256(secret, "X-Signature")
-        .tool("billing_event")
+    .webhook("/webhooks/billing", Webhook::to("billing_event")
+        .verify(verify::hmac_sha256(secret, "X-Signature"))
         .event_id("/id")
         .enqueue())
-    .webhook("/webhooks/chat", Webhook::shared_secret("X-Token", token)
-        .tool("chat_update")
-        .event_id("/update_id"))
 ```
 
-O Carmy não conhece provedor nenhum. Ele oferece três verificações genéricas, e o app diz
-o header, o segredo e onde fica a identidade:
+| método | faz |
+|--------|-----|
+| `Webhook::to(tool)` | a tool que recebe o payload verificado como entrada |
+| `.verify(check)` | como reconhecer uma entrega autêntica; obrigatório |
+| `.event_id("/id")` | um [JSON pointer](https://datatracker.ietf.org/doc/html/rfc6901) para a identidade da entrega; strings e números viram o `request_id` |
+| `.enqueue()` | responde `202` na hora e roda a tool como um [job](/pt-br/guides/jobs/) |
+| `.unverified()` | aceita toda entrega, para remetentes autenticados antes (um gateway, uma rede privada) |
 
-| construtor | verifica |
-|------------|----------|
-| `Webhook::hmac_sha256(secret, header)` | o `header` traz o HMAC-SHA256 do corpo em hex, com ou sem o prefixo `sha256=` |
-| `Webhook::shared_secret(header, secret)` | o `header` é igual a um segredo compartilhado com o remetente |
-| `Webhook::custom(\|headers, body\| ..)` | qualquer outro esquema: assinaturas com timestamp, outros algoritmos, allow-lists |
+## Verificação
 
-Os segredos são comparados em tempo constante. Sem uma entrega válida a tool nunca vê o
-corpo: a resposta é `401` com `WEBHOOK_UNAUTHORIZED`. Um corpo que não é JSON responde
-`400` com `INVALID_REQUEST`.
+O `.verify` recebe qualquer função de um `Delivery` (os headers e o corpo bruto) para
+`bool`. Duas verificações comuns já vêm prontas:
 
-## Identidade
+| verificação | aceita quando |
+|-------------|---------------|
+| `verify::hmac_sha256(secret, header)` | o `header` traz o HMAC-SHA256 do corpo em hex, com ou sem `sha256=` |
+| `verify::shared_secret(header, secret)` | o `header` é igual a um segredo compartilhado com o remetente |
 
-`.event_id("/id")` é um [JSON pointer](https://datatracker.ietf.org/doc/html/rfc6901)
-dentro do payload: `/id`, `/event/id`, `/update_id`. Strings e números viram o
-`request_id`. Sem ele, ou quando o pointer não encontra nada, as entregas não são
+Qualquer outra coisa é uma closure. Compare segredos em tempo constante:
+
+```rust
+Webhook::to("partner_event").verify(move |delivery| {
+    let Some(signature) = delivery.header("x-partner-signature") else { return false };
+    my_scheme::is_valid(&secret, signature, delivery.body)
+})
+```
+
+Uma entrega que falha na verificação nunca chega à tool: `401` com
+`WEBHOOK_UNAUTHORIZED`. Um corpo que não é JSON responde `400` com `INVALID_REQUEST`.
+
+## Seguro por padrão
+
+O app se recusa a subir, com `INVALID_WEBHOOK` e o motivo, quando um webhook:
+
+- não tem `.verify(..)` nem `.unverified()`;
+- aponta para uma tool que não existe;
+- usa `.enqueue()` sem fila de jobs;
+- usa um caminho já ocupado, ou que não começa com `/`.
+
+Sem `.event_id(..)`, ou quando o pointer não encontra nada, as entregas não são
 deduplicadas e todas rodam.
 
 ## Inline ou enfileirado
 
 Sem `.enqueue()` a tool roda inline e a resposta é o
-[`ResultDto`](/pt-br/transports/http/) de sempre, com o status da execução. Com ele, a
-entrega é aceita na hora com `202` e `{ "job_id", "request_id" }`, e um worker roda a tool
-como um [job](/pt-br/guides/jobs/). **Enfileirar é o modo recomendado:** os remetentes
-esgotam o tempo em segundos e reenviam, e um job sobrevive a um restart e tenta de novo
-sozinho.
+[`ResultDto`](/pt-br/transports/http/) de sempre. Com ele, a resposta é `202` com
+`{ "job_id", "request_id" }`, e um worker roda a tool. **Enfileirar é o modo
+recomendado:** os remetentes esgotam o tempo em segundos e reenviam, e um job sobrevive a
+um restart e tenta de novo sozinho.
 
-## Um esquema próprio
+## Para agentes
 
-Um remetente que assina `"{timestamp}.{body}"` e rejeita timestamps antigos cabe no
-`Webhook::custom`:
+Os webhooks aparecem na descoberta e no console (`webhooks`), nunca com os segredos:
 
-```rust
-Webhook::custom(move |headers, body| {
-    let Some((t, signature)) = parse_signature_header(headers) else { return false };
-    fresh(t, Duration::from_secs(300)) && hmac_matches(&secret, &[t.as_bytes(), b".", body], signature)
-})
+```json
+"webhooks": [
+  { "path": "/webhooks/billing", "tool": "billing_event", "mode": "enqueue", "event_id": "/id", "verified": true }
+]
 ```
 
-## A tool
-
-O payload verificado é a entrada da tool. Declare só o que você lê:
-
-```rust
-#[derive(Deserialize, JsonSchema)]
-struct BillingEvent {
-    id: String,
-    #[serde(rename = "type")]
-    kind: String,
-    data: serde_json::Value,
-}
-
-#[carmy::tool(description = "Aplica um evento de assinatura", effect = "write")]
-async fn billing_event(State(store): State<Arc<Store>>, input: BillingEvent) -> AgentResult<String> { .. }
-```
-
-A tool é uma tool comum: agentes podem chamá-la, o console pode chamá-la, e o efeito, o
-schema e o registro de auditoria são os mesmos. Um webhook mal configurado (sem tool,
-tool desconhecida, `.enqueue()` sem fila) falha quando o app é construído, não na
-primeira entrega.
+Um agente que precisa reprocessar ou simular uma entrega chama a tool direto com o
+payload e o mesmo `request_id`. É o mesmo caminho, com o mesmo efeito, replay e
+auditoria, e sem assinatura para forjar.
 
 ## Rotas próprias
 
-`Webhook::verify(&headers, &body)` é público, para hosts que montam webhooks nas próprias
+`webhook.check(&headers, &body)` é público, para hosts que montam webhooks nas próprias
 rotas e querem a mesma verificação.

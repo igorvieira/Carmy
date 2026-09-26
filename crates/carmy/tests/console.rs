@@ -157,8 +157,9 @@ async fn audit_and_dead_letters_are_visible_when_attached() {
     let extras = carmy::console::Extras {
         audit: Some(audit),
         jobs: Some(jobs),
+        webhooks: vec![serde_json::json!({"path": "/hook", "tool": "create_order"})],
     };
-    let input = "audit 5\n{\"id\":2,\"op\":\"dead\"}\n{\"id\":3,\"op\":\"call\",\"tool\":\"create_order\",\"arguments\":{\"sku\":\"A\"}}\naudit\n";
+    let input = "webhooks\naudit 5\n{\"id\":2,\"op\":\"dead\"}\n{\"id\":3,\"op\":\"call\",\"tool\":\"create_order\",\"arguments\":{\"sku\":\"A\"}}\naudit\n";
     let mut output = Vec::new();
     carmy::console::serve_with(runtime, "test", extras, input.as_bytes(), &mut output)
         .await
@@ -169,14 +170,15 @@ async fn audit_and_dead_letters_are_visible_when_attached() {
         .map(|l| serde_json::from_str(l).unwrap())
         .collect();
     // The job's execution is already on the trail; it carries no arguments.
-    let first = &out[1]["result"]["executions"];
+    assert_eq!(out[1]["result"]["webhooks"][0]["tool"], "create_order");
+    let first = &out[2]["result"]["executions"];
     assert_eq!(first.as_array().unwrap().len(), 1);
     assert_eq!(first[0]["tool"], "create_order");
     assert_eq!(first[0]["error_code"], "INVALID_ARGUMENTS");
     assert!(first[0].get("arguments").is_none());
-    assert_eq!(out[2]["result"]["jobs"].as_array().unwrap().len(), 0);
-    assert_eq!(out[3]["ok"], true);
-    let latest = &out[4]["result"]["executions"];
+    assert_eq!(out[3]["result"]["jobs"].as_array().unwrap().len(), 0);
+    assert_eq!(out[4]["ok"], true);
+    let latest = &out[5]["result"]["executions"];
     assert_eq!(latest.as_array().unwrap().len(), 2);
     assert_eq!(latest[0]["status"], "completed");
     assert_eq!(latest[0]["principal"], "console");

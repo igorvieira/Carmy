@@ -11,7 +11,12 @@
 //!
 //! Sources and publishers are fakes, as in a local deal-engine setup, so the example
 //! runs anywhere. Swap them for real ones through [`Settings`].
-use carmy::{http::Webhook, jobs::Jobs, prelude::*, runtime::execution_request};
+use carmy::{
+    http::{Webhook, verify},
+    jobs::Jobs,
+    prelude::*,
+    runtime::execution_request,
+};
 use serde_json::json;
 use std::{
     collections::BTreeMap,
@@ -540,8 +545,11 @@ pub fn app_with(settings: Settings, store: Arc<Store>, publishers: Arc<Publisher
         })
         .webhook(
             "/webhooks/billing",
-            Webhook::hmac_sha256(settings.webhook_secret.clone(), "X-Signature")
-                .tool("membership_event")
+            Webhook::to("membership_event")
+                .verify(verify::hmac_sha256(
+                    settings.webhook_secret.clone(),
+                    "X-Signature",
+                ))
                 .event_id("/id")
                 .enqueue(),
         )

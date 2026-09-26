@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{convert::Infallible, sync::Arc};
-pub use webhooks::{Enqueue, Webhook, webhook_router};
+pub use webhooks::{Delivery, Enqueue, Webhook, verify};
 
 pub const DISCOVERY_PATH: &str = "/.well-known/agent";
 pub const TOOLS_PATH: &str = "/agent/tools";
@@ -161,18 +161,45 @@ struct HttpState {
 /// authentication; request bodies can never set context. Apply authentication to the
 /// entire router if tool names and schemas are private.
 pub fn router(runtime: Arc<Runtime>, server: impl Into<String>) -> Router {
+    agent_router(runtime, server.into(), Vec::new())
+}
+/// [`router`] plus webhooks: one `POST` route each, listed in discovery so agents see
+/// where each door leads. `enqueuer` runs the hooks that [`Webhook::enqueue`].
+pub fn router_with_webhooks(
+    runtime: Arc<Runtime>,
+    server: impl Into<String>,
+    hooks: impl IntoIterator<Item = (String, Webhook)>,
+    enqueuer: Option<Arc<dyn Enqueue>>,
+) -> Result<Router, AgentError> {
+    let hooks: Vec<(String, Webhook)> = hooks.into_iter().collect();
+    let described = hooks
+        .iter()
+        .map(|(path, hook)| hook.describe(path))
+        .collect();
+    let webhooks = webhooks::webhook_routes(&runtime, hooks, enqueuer)?;
+    Ok(agent_router(runtime, server.into(), described).merge(webhooks))
+}
+fn agent_router(runtime: Arc<Runtime>, server: String, webhooks: Vec<Value>) -> Router {
     let metadata = runtime.tools();
     let tools: Vec<ToolDto> = metadata.iter().map(ToolDto::from).collect();
     let tools = Document::new(json!({ "tools": tools }));
     // `tools_version` lets agents skip refetching an unchanged catalog.
-    let discovery = Document::new(json!({
+    let mut discovery = json!({
         "protocol": "carmy/1",
-        "server": server.into(),
+        "server": server,
         "capabilities": ["tools", "streaming", "idempotency"],
         "tools_url": TOOLS_PATH,
         "tools_version": tools.etag.trim_matches('"'),
         "execute_url": EXECUTE_PATH,
-    }));
+    });
+    if !webhooks.is_empty() {
+        discovery["capabilities"]
+            .as_array_mut()
+            .expect("an array")
+            .push("webhooks".into());
+        discovery["webhooks"] = webhooks.into();
+    }
+    let discovery = Document::new(discovery);
     let state = HttpState {
         runtime,
         discovery,

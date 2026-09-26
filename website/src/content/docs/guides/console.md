@@ -86,6 +86,9 @@ Each message is one JSON object per line. The first line is:
 | `{"id":3,"op":"call","tool":"create_order","arguments":{"sku":"KB-01"},"request_id":"r1"}` | the same body as `POST /agent/execute`, plus `replayed` and `duration_ms` |
 | `{"id":4,"op":"confirm","tool":"cancel_order"}` | grants `confirm:cancel_order` for this session |
 | `{"id":5,"op":"revoke","tool":"cancel_order"}` | withdraws the grant |
+| `{"id":6,"op":"audit","limit":20}` | the latest [execution records](/guides/audit/), newest first |
+| `{"id":7,"op":"dead","limit":20}` | the [jobs](/guides/jobs/) in the dead-letter queue |
+| `{"id":8,"op":"webhooks"}` | the [webhooks](/guides/webhooks/): path, tool, mode and identity pointer |
 | `{"op":"help"}` / `{"op":"exit"}` | lists the operations / ends the session |
 
 Every response echoes `id` and carries `ok`:

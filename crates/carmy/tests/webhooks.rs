@@ -1,5 +1,5 @@
 use axum::{body::Body, http::Request};
-use carmy::http::Webhook;
+use carmy::http::{Webhook, verify};
 use carmy::prelude::*;
 use hmac::{Hmac, Mac};
 use http_body_util::BodyExt;
@@ -27,8 +27,8 @@ async fn an_app_receives_webhooks_and_queues_them_as_jobs() {
         .jobs(store.clone())
         .webhook(
             "/webhooks/billing",
-            Webhook::hmac_sha256("s3cret", "X-Signature")
-                .tool("billing_event")
+            Webhook::to("billing_event")
+                .verify(verify::hmac_sha256("s3cret", "X-Signature"))
                 .event_id("/id")
                 .enqueue(),
         )

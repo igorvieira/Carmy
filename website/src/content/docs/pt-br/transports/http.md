@@ -22,7 +22,9 @@ das requisições é limitado a 1 MiB.
 ```
 
 O `tools_version` só muda quando o catálogo muda, então os agentes podem guardar o
-catálogo em cache em vez de baixá-lo de novo.
+catálogo em cache em vez de baixá-lo de novo. Um app com [webhooks](/pt-br/guides/webhooks/)
+acrescenta `"webhooks"` a `capabilities` e lista cada um (caminho, tool, modo, pointer de
+identidade), nunca com o segredo.
 
 ## `GET /agent/tools`
 
