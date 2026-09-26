@@ -282,28 +282,17 @@ impl Runtime {
                 ErrorCategory::Cancelled,
             ));
         }
-        let key = request
-            .request_id
-            .as_ref()
-            .map(|request_id| IdempotencyKey {
+        // The fingerprint is only needed for idempotent requests.
+        let idempotency = request.request_id.as_ref().map(|request_id| {
+            let key = IdempotencyKey {
                 principal: request.context.principal.clone(),
                 session: request.context.session.clone(),
                 request_id: request_id.clone(),
-            });
-        let fingerprint = format!(
-            "{:x}",
-            Sha256::digest(
-                serde_json::to_vec(&serde_json::json!([
-                    request.tool,
-                    request.arguments,
-                    request.metadata,
-                    request.context.metadata
-                ]))
-                .expect("JSON values serialize")
-            )
-        );
-        if let Some(key) = &key {
-            match self.store.reserve(key, &fingerprint).await? {
+            };
+            (key, fingerprint(&request))
+        });
+        if let Some((key, fingerprint)) = &idempotency {
+            match self.store.reserve(key, fingerprint).await? {
                 Reservation::Acquired => {}
                 Reservation::Replay(result) => return Ok((result, true)),
                 Reservation::Conflict => {
@@ -361,8 +350,8 @@ impl Runtime {
             ok: outcome.is_ok(),
         });
         let result = result(execution_id, outcome);
-        if let Some(key) = &key {
-            self.store.complete(key, &fingerprint, &result).await?;
+        if let Some((key, fingerprint)) = &idempotency {
+            self.store.complete(key, fingerprint, &result).await?;
         }
         Ok((result, false))
     }
@@ -396,6 +385,29 @@ pub fn execution_request(tool: impl Into<String>, arguments: Value) -> Execution
     }
 }
 
+/// SHA-256 of `[tool, arguments, metadata, context metadata]` as JSON, streamed into
+/// the hasher without building an intermediate copy of the arguments.
+fn fingerprint(request: &ExecutionRequest) -> String {
+    struct Hasher(Sha256);
+    impl std::io::Write for Hasher {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.update(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut hasher = Hasher(Sha256::new());
+    let identity = (
+        &request.tool,
+        &request.arguments,
+        &request.metadata,
+        &request.context.metadata,
+    );
+    serde_json::to_writer(&mut hasher, &identity).expect("JSON values serialize");
+    format!("{:x}", hasher.0.finalize())
+}
 pub(crate) fn error(code: &str, message: &str, category: ErrorCategory) -> AgentError {
     AgentError::new(code, message, category)
 }
@@ -410,5 +422,27 @@ fn result(execution_id: String, outcome: AgentResult<Value>) -> ExecutionResult 
         execution_id,
         status,
         outcome,
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn fingerprint_matches_the_previous_encoding() {
+        let mut request = execution_request("create", serde_json::json!({"b": 1, "a": [true]}));
+        request.metadata.insert("m".into(), serde_json::json!("x"));
+        let previous = format!(
+            "{:x}",
+            Sha256::digest(
+                serde_json::to_vec(&serde_json::json!([
+                    request.tool,
+                    request.arguments,
+                    request.metadata,
+                    request.context.metadata
+                ]))
+                .unwrap()
+            )
+        );
+        assert_eq!(fingerprint(&request), previous);
     }
 }
