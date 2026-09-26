@@ -9,8 +9,10 @@
 //! - Carmy effects become MCP tool annotations (`readOnlyHint`, `destructiveHint`,
 //!   `idempotentHint`, `openWorldHint`); the exact Carmy metadata is kept in the
 //!   tool's `_meta` under `carmy/*` keys.
-//! - Tool failures are `isError` results whose `structuredContent` is
-//!   `{"error": AgentError}`; an unknown tool is a JSON-RPC invalid-params error.
+//! - Tool failures are `isError` results carrying `{"error": AgentError}` as JSON text,
+//!   with the error also in `_meta["carmy/error"]`. They never set `structuredContent`,
+//!   which clients validate against the output schema. An unknown tool is a JSON-RPC
+//!   invalid-params error.
 //! - `_meta["carmy/request_id"]` on `tools/call` is the idempotency identity.
 use carmy_core::*;
 use carmy_runtime::{Runtime, execution_request};
@@ -103,15 +105,22 @@ fn request_id(params: &CallToolRequestParams, ctx: &RequestContext<RoleServer>) 
         .and_then(Value::as_str)
         .map(str::to_owned)
 }
+/// Errors never use `structuredContent`: clients validate it against the tool's output
+/// schema even when `isError` is set. The error travels as JSON text for the model and,
+/// complete, in `_meta["carmy/error"]` for programs.
 fn to_mcp(result: ExecutionResult) -> CallToolResult {
-    let meta = json!({
+    let mut meta = json!({
         "carmy/execution_id": result.execution_id,
         "carmy/status": result.status,
     });
     let call = match result.outcome {
         Ok(value @ Value::Object(_)) => CallToolResult::structured(value),
         Ok(value) => CallToolResult::success(vec![ContentBlock::text(value.to_string())]),
-        Err(error) => CallToolResult::structured_error(json!({ "error": error })),
+        Err(error) => {
+            let body = json!({ "error": error });
+            meta["carmy/error"] = body["error"].clone();
+            CallToolResult::error(vec![ContentBlock::text(body.to_string())])
+        }
     };
     call.with_meta(Some(MetaObject(object(&meta))))
 }

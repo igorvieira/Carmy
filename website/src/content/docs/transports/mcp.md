@@ -51,7 +51,7 @@ Logs go to stderr, so stdout stays reserved for the protocol.
 | `idempotent` | `idempotentHint` |
 | effect, confirmation, parallel safety | `_meta["carmy/effect"]`, `_meta["carmy/confirmation"]`, `_meta["carmy/parallel_safe"]` |
 | successful object result | `structuredContent`, plus JSON text content |
-| `AgentError` | `isError: true` with `structuredContent: {"error": …}` |
+| `AgentError` | `isError: true`, with `{"error": …}` as JSON text content and in `_meta["carmy/error"]`; never in `structuredContent`, which clients validate against the output schema |
 | unknown tool | JSON-RPC `-32602`, with `data.error` |
 | `_meta["carmy/request_id"]` on `tools/call` | the idempotency `request_id` |
 | execution ID and status | result `_meta["carmy/execution_id"]` and `_meta["carmy/status"]` |

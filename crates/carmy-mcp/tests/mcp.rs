@@ -93,7 +93,12 @@ async fn invokes_runtime_and_converts_errors() {
         .await
         .unwrap();
     assert_eq!(failed.is_error, Some(true));
-    let error = &failed.structured_content.unwrap()["error"];
+    // Errors must not set structuredContent: clients validate it against the output schema.
+    assert!(failed.structured_content.is_none());
+    let text: serde_json::Value =
+        serde_json::from_str(&failed.content[0].as_text().unwrap().text).unwrap();
+    assert_eq!(text["error"]["code"], "EMPTY_NAME");
+    let error = &failed.meta.unwrap().0["carmy/error"];
     assert_eq!(error["code"], "EMPTY_NAME");
     assert_eq!(error["recoverable"], true);
     let invalid = client
@@ -101,7 +106,7 @@ async fn invokes_runtime_and_converts_errors() {
         .await
         .unwrap();
     assert_eq!(
-        invalid.structured_content.unwrap()["error"]["code"],
+        invalid.meta.unwrap().0["carmy/error"]["code"],
         "INVALID_ARGUMENTS"
     );
     assert!(client.call_tool(call("missing", json!({}))).await.is_err());
