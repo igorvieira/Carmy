@@ -14,6 +14,16 @@ ambiente. A precedência é: ambiente, depois o arquivo, depois os padrões.
 | `address` | `CARMY_ADDR` | `127.0.0.1:3000` |
 | `timeout_secs` | `CARMY_TIMEOUT_SECS` | `30` |
 
+A tabela `[http]` guarda as proteções do servidor (veja
+[Segurança](/pt-br/guides/security/#endurecendo-o-servidor-http)):
+
+| chave | variável de ambiente | padrão |
+|-------|----------------------|--------|
+| `http.header_timeout_secs` | `CARMY_HTTP_HEADER_TIMEOUT_SECS` | `10` |
+| `http.body_timeout_secs` | `CARMY_HTTP_BODY_TIMEOUT_SECS` | `30` |
+| `http.max_connections` | `CARMY_HTTP_MAX_CONNECTIONS` | `4096` |
+| `http.security_headers` | `CARMY_HTTP_SECURITY_HEADERS` | `false` |
+
 `CARMY_CONFIG=caminho/para/arquivo.toml` lê outro arquivo. Chaves desconhecidas são
 erros, então erros de digitação não passam despercebidos:
 

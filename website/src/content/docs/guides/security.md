@@ -72,6 +72,25 @@ Built-in policies:
 Rate limiting fits the same hook (return `ErrorCategory::Capacity` with `.retryable(…)`),
 or can live in Tower middleware on the router.
 
+## Rate limiting
+
+`RateLimit` is a ready-made policy: a fixed window per principal (or per session, then a
+shared anonymous window). Rejections are `RATE_LIMITED`, in the `capacity` category,
+retryable, with `retry_after` in seconds:
+
+```rust
+use carmy::runtime::RateLimit;
+use std::time::Duration;
+
+carmy::app()
+    .policy(RateLimit::new(60, Duration::from_secs(60)))
+    .run()
+    .await
+```
+
+It is process-local. Put a shared limiter (a gateway, or Tower middleware backed by a
+store) in front of several instances.
+
 ## Limits
 
 - Arguments are validated against the input schema before the tool runs.
@@ -79,3 +98,60 @@ or can live in Tower middleware on the router.
 - HTTP bodies are limited to 1 MiB, and `request_id`s to 256 bytes.
 - The idempotency store is bounded and fails closed.
 - Every execution has a [deadline](/guides/cancellation/).
+
+## Hardening the HTTP server
+
+The execution deadline starts when a tool starts. Everything before that is bounded by
+`ServerOptions`, so a Carmy server can face the internet without a proxy in front:
+
+| protection | default | `carmy.toml` `[http]` key |
+|------------|---------|---------------------------|
+| header timeout, also for idle keep-alive connections | 10 s | `header_timeout_secs` |
+| body timeout | 30 s | `body_timeout_secs` |
+| concurrent connections; extra ones wait in the accept backlog | 4096 | `max_connections` |
+| security headers (`nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy`, a deny-all CSP) | off | `security_headers` |
+| CORS | off: no browser origin may call the API | code only |
+
+The headers and CORS are off because the API serves JSON to agents, not pages to
+browsers. Turn them on when a browser will call it:
+
+```rust
+use carmy::http::{Any, CorsLayer, ServerOptions};
+
+carmy::app()
+    .http(ServerOptions {
+        security_headers: true,
+        cors: Some(CorsLayer::new().allow_origin(["https://app.example".parse().unwrap()])),
+        ..ServerOptions::default()
+    })
+    .run()
+    .await
+```
+
+Every protection has a contract test over a real socket: a client that trickles headers,
+one that never sends its body, an idle keep-alive connection, and connections beyond the
+limit. Run them with `cargo test -p carmy-http --test hardening`.
+
+`Strict-Transport-Security` is not set, because Carmy does not terminate TLS. Set it at
+the proxy or load balancer that does.
+
+## What other frameworks check, and Carmy's answer
+
+| check | Express | Rails | FastAPI | Carmy |
+|-------|---------|-------|---------|-------|
+| security headers | `helmet` | default | no | `security_headers` (opt-in) |
+| CORS | `cors` | gem | built in | `ServerOptions::cors` (opt-in) |
+| rate limiting | package | `rack-attack` | package | `RateLimit` policy |
+| CSRF | `csurf` | default | no | not applicable: JSON only, no cookies |
+| slow-client timeouts | proxy | server | uvicorn | built in, tested |
+| body limit | yes | yes | yes | 1 MiB |
+| dependency audit | `npm audit` | `bundler-audit` | `pip-audit` | `cargo deny` in CI |
+| fuzzing | rare | rare | rare | `cargo fuzz` in CI, on the console protocol and `/agent/execute` |
+| `unsafe` code | n/a | n/a | n/a | none in Carmy's crates |
+
+What Carmy checks that these frameworks don't: declared effects, trusted confirmation
+for destructive tools, context that requests cannot forge, input *and* output
+validation, replay-safe retries, and logs without payloads.
+
+No independent security audit of Carmy has been done. Report vulnerabilities privately
+through [GitHub](https://github.com/igorvieira/Carmy/security/advisories/new).

@@ -4,6 +4,21 @@ All notable changes to Carmy are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/). APIs are unstable during 0.x.
 
+## [Unreleased]
+
+### Security
+
+- **Connection-level protections** in `ServerOptions`, on by default: a header timeout
+  that also closes idle keep-alive connections (10 s), a body timeout (30 s), and a
+  connection limit (4096). Each has a contract test over a real socket. Configure them in
+  `carmy.toml` under `[http]`, with `CARMY_HTTP_*` variables, or with `Carmy::http`.
+- **Opt-in security headers and CORS** (`security_headers`, `cors`).
+- **`RateLimit`**, a ready-made `ExecutionPolicy`: a fixed window per principal, with
+  `RATE_LIMITED` errors that carry `retry_after`.
+- **`cargo deny` in CI:** known vulnerabilities, licenses, sources and wildcard
+  dependencies.
+- **Fuzzing in CI** with `cargo fuzz`, on the console protocol and `POST /agent/execute`.
+
 ## [0.3.0] - 2026-09-26
 
 ### Added

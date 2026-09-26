@@ -14,6 +14,16 @@ variables. The precedence is environment, then file, then defaults.
 | `address` | `CARMY_ADDR` | `127.0.0.1:3000` |
 | `timeout_secs` | `CARMY_TIMEOUT_SECS` | `30` |
 
+The `[http]` table holds the server protections (see
+[Security](/guides/security/#hardening-the-http-server)):
+
+| key | env var | default |
+|-----|---------|---------|
+| `http.header_timeout_secs` | `CARMY_HTTP_HEADER_TIMEOUT_SECS` | `10` |
+| `http.body_timeout_secs` | `CARMY_HTTP_BODY_TIMEOUT_SECS` | `30` |
+| `http.max_connections` | `CARMY_HTTP_MAX_CONNECTIONS` | `4096` |
+| `http.security_headers` | `CARMY_HTTP_SECURITY_HEADERS` | `false` |
+
 `CARMY_CONFIG=path/to/file.toml` reads another file. Unknown keys are errors, so typos
 don't go unnoticed:
 
