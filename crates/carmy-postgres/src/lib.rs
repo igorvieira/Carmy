@@ -1,18 +1,21 @@
-//! Durable stores on Postgres: jobs (with a transactional outbox) and idempotency.
+//! Durable stores on Postgres: jobs (with a transactional outbox), idempotency and audit.
 //!
 //! ```no_run
 //! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 //! let pool = carmy_postgres::connect("postgres://localhost/shop").await?;
 //! carmy_postgres::migrate(&pool).await?;
 //! let jobs = std::sync::Arc::new(carmy_postgres::PostgresJobStore::new(pool.clone()));
-//! let idempotency = std::sync::Arc::new(carmy_postgres::PostgresIdempotencyStore::new(pool));
+//! let idempotency = std::sync::Arc::new(carmy_postgres::PostgresIdempotencyStore::new(pool.clone()));
+//! let audit = std::sync::Arc::new(carmy_postgres::PostgresAudit::new(pool));
 //! # Ok(()) }
 //! ```
 //!
 //! Every `carmy_*` table is created by [`migrate`], which is safe to run on every start.
 use carmy_core::{AgentError, AgentResult, ErrorCategory, ExecutionRequest, ExecutionResult};
 use carmy_jobs::{Job, JobId, JobOutcome, JobRequest, JobStatus, JobStore, StoreFuture};
-use carmy_runtime::{IdempotencyKey, IdempotencyStore, Reservation};
+use carmy_runtime::{
+    ExecutionRecord, ExecutionSink, IdempotencyKey, IdempotencyStore, Reservation,
+};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Row, Transaction, postgres::PgRow};
@@ -390,4 +393,122 @@ impl IdempotencyStore for PostgresIdempotencyStore {
             }
         })
     }
+}
+
+// ---------------------------------------------------------------- audit
+
+/// [`ExecutionSink`] on Postgres. Records go through a bounded channel to one writer
+/// task, so executions never wait on the database; when the channel is full, the
+/// record is dropped and a warning logged rather than slowing the runtime.
+pub struct PostgresAudit {
+    pool: PgPool,
+    sender: tokio::sync::mpsc::Sender<ExecutionRecord>,
+    writer: tokio::task::JoinHandle<()>,
+}
+
+impl PostgresAudit {
+    /// Buffers up to 4096 records.
+    pub fn new(pool: PgPool) -> Self {
+        Self::with_capacity(pool, 4096)
+    }
+
+    pub fn with_capacity(pool: PgPool, capacity: usize) -> Self {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel::<ExecutionRecord>(capacity.max(1));
+        let writer = tokio::spawn({
+            let pool = pool.clone();
+            async move {
+                while let Some(record) = receiver.recv().await {
+                    if let Err(e) = insert_record(&pool, &record).await {
+                        tracing::warn!(
+                            execution_id = %record.execution_id,
+                            error = %e,
+                            "audit record was not written"
+                        );
+                    }
+                }
+            }
+        });
+        Self {
+            pool,
+            sender,
+            writer,
+        }
+    }
+
+    /// Up to `limit` records, newest first.
+    pub async fn recent(&self, limit: usize) -> AgentResult<Vec<ExecutionRecord>> {
+        let rows = sqlx::query(
+            "SELECT execution_id, request_id, principal, session, tool, effect, status, \
+             error_code, duration_ms, started_at, replayed \
+             FROM carmy_audit ORDER BY started_at DESC, recorded_at DESC LIMIT $1",
+        )
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(store_error)?;
+        rows.iter().map(record_from_row).collect()
+    }
+
+    /// Stop accepting records and wait until every buffered one is written.
+    pub async fn flush(self) {
+        drop(self.sender);
+        let _ = self.writer.await;
+    }
+}
+
+impl ExecutionSink for PostgresAudit {
+    fn record(&self, record: ExecutionRecord) {
+        if let Err(e) = self.sender.try_send(record) {
+            tracing::warn!(
+                execution_id = %e.into_inner().execution_id,
+                "audit buffer is full; record dropped"
+            );
+        }
+    }
+}
+
+async fn insert_record(pool: &PgPool, record: &ExecutionRecord) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO carmy_audit (execution_id, request_id, principal, session, tool, effect, \
+         status, error_code, duration_ms, started_at, replayed) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+    )
+    .bind(&record.execution_id)
+    .bind(&record.request_id)
+    .bind(&record.principal)
+    .bind(&record.session)
+    .bind(&record.tool)
+    .bind(record.effect.map(|e| e.as_str()))
+    .bind(record.status.as_str())
+    .bind(&record.error_code)
+    .bind(record.duration_ms as i64)
+    .bind(record.started_at)
+    .bind(record.replayed)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+fn record_from_row(row: &PgRow) -> AgentResult<ExecutionRecord> {
+    let text = |name: &str| row.get::<String, _>(name);
+    let effect = row
+        .get::<Option<String>, _>("effect")
+        .map(|e| serde_json::from_value(Value::String(e)))
+        .transpose()
+        .map_err(|e| AgentError::new("STORE_ERROR", e.to_string(), ErrorCategory::Internal))?;
+    let status = serde_json::from_value(Value::String(text("status")))
+        .map_err(|e| AgentError::new("STORE_ERROR", e.to_string(), ErrorCategory::Internal))?;
+    Ok(ExecutionRecord {
+        execution_id: text("execution_id"),
+        request_id: row.get("request_id"),
+        principal: row.get("principal"),
+        session: row.get("session"),
+        tool: text("tool"),
+        effect,
+        status,
+        error_code: row.get("error_code"),
+        duration_ms: row.get::<i64, _>("duration_ms").max(0) as u64,
+        started_at: row.get("started_at"),
+        replayed: row.get("replayed"),
+    })
 }

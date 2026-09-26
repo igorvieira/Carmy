@@ -2,7 +2,7 @@
 //! otherwise; CI provides a database. Tests share the tables, so they run one at a time.
 use carmy_core::*;
 use carmy_jobs::{JobOutcome, JobStatus, JobStore, Jobs, ManualClock, RetryPolicy};
-use carmy_postgres::{PostgresIdempotencyStore, PostgresJobStore, connect, migrate};
+use carmy_postgres::{PostgresAudit, PostgresIdempotencyStore, PostgresJobStore, connect, migrate};
 use carmy_runtime::{IdempotencyKey, IdempotencyStore, Reservation, Runtime, execution_request};
 use chrono::{TimeZone, Utc};
 use serde_json::json;
@@ -26,7 +26,7 @@ async fn database() -> Option<(PgPool, tokio::sync::MutexGuard<'static, ()>)> {
     let guard = LOCK.lock().await;
     let pool = connect(&url).await.expect("a reachable database");
     migrate(&pool).await.expect("migrations apply");
-    sqlx::query("TRUNCATE carmy_jobs, carmy_idempotency")
+    sqlx::query("TRUNCATE carmy_jobs, carmy_idempotency, carmy_audit")
         .execute(&pool)
         .await
         .unwrap();
@@ -315,4 +315,41 @@ async fn the_runtime_replays_through_postgres() {
     let second = runtime.execute(req).await;
     assert_eq!(first, second);
     assert_eq!(calls.load(Ordering::SeqCst), 1, "the tool ran once");
+}
+
+#[tokio::test]
+async fn the_audit_trail_is_written_off_the_execution_path() {
+    let Some((pool, _guard)) = database().await else {
+        return;
+    };
+    let audit = Arc::new(PostgresAudit::new(pool.clone()));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let runtime = Runtime::new()
+        .sink(audit.clone())
+        .tool(Counting(calls.clone()))
+        .unwrap();
+    let mut req = request("x").with_request_id("audit-1");
+    req.context.principal = Some("ada".into());
+    runtime.execute(req.clone()).await;
+    runtime.execute(req).await;
+    runtime.execute(execution_request("count", json!(42))).await; // invalid arguments
+
+    // The writer is asynchronous: wait for the rows without blocking the executions.
+    let mut records = Vec::new();
+    for _ in 0..50 {
+        records = audit.recent(10).await.unwrap();
+        if records.len() == 3 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(records.len(), 3);
+    assert_eq!(records[0].error_code.as_deref(), Some("INVALID_ARGUMENTS"));
+    assert_eq!(records[0].status, ExecutionStatus::Failed);
+    assert!(records[1].replayed);
+    assert_eq!(records[1].execution_id, records[2].execution_id);
+    assert_eq!(records[2].principal.as_deref(), Some("ada"));
+    assert_eq!(records[2].effect, Some(Effect::Write));
+    assert_eq!(records[2].request_id.as_deref(), Some("audit-1"));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }

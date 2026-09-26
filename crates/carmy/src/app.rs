@@ -64,6 +64,7 @@ pub struct Carmy {
     retry: carmy_jobs::RetryPolicy,
     worker_concurrency: usize,
     schedules: Vec<ScheduleSpec>,
+    audit: Arc<carmy_runtime::InMemoryAudit>,
     #[cfg(feature = "http")]
     webhooks: Vec<(String, carmy_http::Webhook)>,
 }
@@ -93,9 +94,20 @@ impl Carmy {
             retry: carmy_jobs::RetryPolicy::default(),
             worker_concurrency: 4,
             schedules: Vec::new(),
+            audit: Arc::new(carmy_runtime::InMemoryAudit::default()),
             #[cfg(feature = "http")]
             webhooks: Vec::new(),
         }
+    }
+    /// Also send every [`carmy_runtime::ExecutionRecord`] here (a durable audit trail,
+    /// say). The in-memory trail the console shows stays on.
+    pub fn sink(mut self, sink: Arc<dyn carmy_runtime::ExecutionSink>) -> Self {
+        self.runtime = self.runtime.sink(sink);
+        self
+    }
+    /// The last executions, newest first: what `carmy console`'s `audit` shows.
+    pub fn audit(&self) -> Arc<carmy_runtime::InMemoryAudit> {
+        self.audit.clone()
     }
     /// Receive a provider's webhook at `path` as a tool execution; see
     /// [`carmy_http::Webhook`]. Hooks that `.enqueue()` use the app's job queue.
@@ -215,6 +227,7 @@ impl Carmy {
         }
         let jobs = carmy_jobs::Jobs::unbound(self.job_store).with_retry(self.retry);
         self.states.insert(jobs.clone());
+        self.runtime = self.runtime.sink(self.audit.clone());
         for register in self.tools {
             register(&mut self.runtime, &self.states).map_err(Error::Registration)?;
         }
@@ -279,8 +292,17 @@ impl Carmy {
             None | Some("server") => self.run_http().await,
             Some("console") => {
                 let name = self.name.clone();
+                let audit = self.audit.clone();
                 let input = tokio::io::BufReader::new(tokio::io::stdin());
-                Ok(crate::console::serve(self.build()?, &name, input, tokio::io::stdout()).await?)
+                let (runtime, jobs) = self.build_with_jobs()?;
+                let extras = crate::console::Extras {
+                    audit: Some(audit),
+                    jobs: Some(jobs),
+                };
+                Ok(
+                    crate::console::serve_with(runtime, &name, extras, input, tokio::io::stdout())
+                        .await?,
+                )
             }
             Some("mcp") => self.run_mcp().await,
             Some("worker") => {

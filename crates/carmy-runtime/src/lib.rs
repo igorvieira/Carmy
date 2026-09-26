@@ -1,5 +1,7 @@
 //! Transport-independent execution and policy enforcement.
+pub mod audit;
 pub mod idempotency;
+pub use audit::*;
 use carmy_core::*;
 use futures_util::{FutureExt, Stream};
 pub use idempotency::*;
@@ -140,6 +142,7 @@ pub struct Runtime {
     policies: Vec<Arc<dyn ExecutionPolicy>>,
     store: Arc<dyn IdempotencyStore>,
     timeout: Duration,
+    sinks: Vec<Arc<dyn ExecutionSink>>,
 }
 impl Default for Runtime {
     fn default() -> Self {
@@ -153,7 +156,14 @@ impl Runtime {
             policies: vec![Arc::new(SafePolicy)],
             store: Arc::new(InMemoryIdempotencyStore::default()),
             timeout: Duration::from_secs(30),
+            sinks: Vec::new(),
         }
+    }
+    /// Receive an [`ExecutionRecord`] after every execution, replays and rejections
+    /// included. Sinks run in order, on the execution's task.
+    pub fn sink(mut self, sink: Arc<dyn ExecutionSink>) -> Self {
+        self.sinks.push(sink);
+        self
     }
     pub fn policy(mut self, policy: impl ExecutionPolicy + 'static) -> Self {
         self.policies.push(Arc::new(policy));
@@ -255,6 +265,16 @@ impl Runtime {
         let id = request.execution_id.clone();
         let events = events.as_ref();
         let registered = self.tools.get(&request.tool);
+        // Only what the audit record needs, and only when something records it.
+        let audit = (!self.sinks.is_empty()).then(|| {
+            (
+                request.context.principal.clone(),
+                request.context.session.clone(),
+                request.tool.clone(),
+                registered.map(|t| t.metadata.effect),
+                chrono::Utc::now(),
+            )
+        });
         // Arguments and outputs are never recorded: they may carry secrets.
         let span = tracing::info_span!(
             "carmy.execution",
@@ -267,6 +287,7 @@ impl Runtime {
             replayed = field::Empty,
             error_code = field::Empty,
         );
+        let span_request_id = request.request_id.clone();
         let started = Instant::now();
         emit(events, || ExecutionEvent::ExecutionStarted {
             execution_id: id.clone(),
@@ -288,6 +309,24 @@ impl Runtime {
             Err(e) => {
                 span.record("error_code", e.code.as_str());
                 tracing::warn!(parent: &span, "execution failed");
+            }
+        }
+        if let Some((principal, session, tool, effect, started_at)) = audit {
+            let record = ExecutionRecord {
+                execution_id: response.execution_id.clone(),
+                request_id: span_request_id,
+                principal,
+                session,
+                tool,
+                effect,
+                status: response.status,
+                error_code: response.outcome.as_ref().err().map(|e| e.code.clone()),
+                duration_ms: started.elapsed().as_millis() as u64,
+                started_at,
+                replayed,
+            };
+            for sink in &self.sinks {
+                sink.record(record.clone());
             }
         }
         emit(events, || ExecutionEvent::ExecutionCompleted {

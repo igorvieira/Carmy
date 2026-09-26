@@ -441,6 +441,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -448,6 +449,7 @@ name = "carmy-runtime"
 version = "0.3.0"
 dependencies = [
  "carmy-core",
+ "chrono",
  "futures-util",
  "jsonschema",
  "schemars",

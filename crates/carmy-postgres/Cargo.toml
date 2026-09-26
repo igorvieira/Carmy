@@ -18,7 +18,8 @@ carmy-jobs = { path = "../carmy-jobs", version = "0.3.0" }
 chrono = { version = "0.4", features = ["serde"] }
 serde_json.workspace = true
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "migrate", "json", "chrono"] }
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["sync", "rt"] }
+tracing.workspace = true
 
 [dev-dependencies]
 schemars.workspace = true

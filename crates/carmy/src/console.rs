@@ -14,14 +14,16 @@
 //!                                                          -> {"id":3,"ok":true,"result":{"status":…,"replayed":false,…}}
 //! {"id":4,"op":"confirm","tool":"delete"}                  -> grants confirm:delete for this session
 //! {"id":5,"op":"revoke","tool":"delete"}
+//! {"id":6,"op":"audit","limit":20}                        -> the latest execution records
+//! {"id":7,"op":"dead","limit":20}                         -> jobs in the dead-letter queue
 //! ```
 //!
 //! A line that does not start with `{` is read as a text command (`tools`,
-//! `describe <tool>`, `confirm <tool>`, `revoke <tool>`, `help`, `exit`, or
+//! `describe <tool>`, `confirm <tool>`, `revoke <tool>`, `audit [n]`, `dead [n]`, `help`, `exit`, or
 //! `<tool> [json] [--request-id <id>]`); the answer is still JSON. Unstable during 0.x.
 use crate::{
     AgentContext, AgentError, CancellationToken, ErrorCategory, ExecutionEvent, ExecutionStatus,
-    runtime::{Runtime, execution_request},
+    runtime::{InMemoryAudit, Runtime, execution_request},
 };
 use futures_util::StreamExt;
 use serde_json::{Map, Value, json};
@@ -31,10 +33,32 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 /// Protocol name sent in the `ready` event.
 pub const PROTOCOL: &str = "carmy-console/1";
 
+/// What the console can show beyond the tools: the audit trail and the job queue.
+#[derive(Default)]
+pub struct Extras {
+    pub audit: Option<Arc<InMemoryAudit>>,
+    pub jobs: Option<crate::jobs::Jobs>,
+}
+
 /// Serve the protocol until `input` ends or an `exit` request arrives.
 pub async fn serve<R, W>(
     runtime: Arc<Runtime>,
     server: &str,
+    input: R,
+    output: W,
+) -> std::io::Result<()>
+where
+    R: AsyncBufRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    serve_with(runtime, server, Extras::default(), input, output).await
+}
+
+/// [`serve`], with the audit trail and job queue available to `audit` and `dead`.
+pub async fn serve_with<R, W>(
+    runtime: Arc<Runtime>,
+    server: &str,
+    extras: Extras,
     input: R,
     mut output: W,
 ) -> std::io::Result<()>
@@ -42,7 +66,7 @@ where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let mut session = Session::new(runtime);
+    let mut session = Session::new(runtime, extras);
     let ready = json!({
         "event": "ready",
         "protocol": PROTOCOL,
@@ -75,16 +99,21 @@ where
 struct Session {
     runtime: Arc<Runtime>,
     context: AgentContext,
+    extras: Extras,
 }
 
 impl Session {
-    fn new(runtime: Arc<Runtime>) -> Self {
+    fn new(runtime: Arc<Runtime>, extras: Extras) -> Self {
         let context = AgentContext {
             principal: Some("console".into()),
             session: Some("console".into()),
             ..AgentContext::default()
         };
-        Self { runtime, context }
+        Self {
+            runtime,
+            context,
+            extras,
+        }
     }
 
     async fn handle(&mut self, request: Value) -> Value {
@@ -112,6 +141,17 @@ impl Session {
             Some("call") => match tool {
                 Some(tool) => Ok(self.call(tool, &request).await),
                 None => Err(invalid("`call` needs a `tool`")),
+            },
+            Some("audit") => match &self.extras.audit {
+                Some(audit) => Ok(json!({ "executions": audit.recent(limit(&request)) })),
+                None => Err(unavailable("no audit trail is attached to this console")),
+            },
+            Some("dead") => match &self.extras.jobs {
+                Some(jobs) => jobs
+                    .dead_letters(limit(&request))
+                    .await
+                    .map(|jobs| json!({ "jobs": jobs })),
+                None => Err(unavailable("no job queue is attached to this console")),
             },
             Some(other) => Err(AgentError::new(
                 "UNKNOWN_OP",
@@ -196,6 +236,17 @@ impl Session {
     }
 }
 
+fn limit(request: &Value) -> usize {
+    request
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map_or(20, |n| n.clamp(1, 1_000) as usize)
+}
+
+fn unavailable(message: &str) -> AgentError {
+    AgentError::new("UNAVAILABLE", message, ErrorCategory::NotFound).recoverable()
+}
+
 fn invalid(message: &str) -> AgentError {
     AgentError::new("INVALID_REQUEST", message, ErrorCategory::Validation)
         .recoverable()
@@ -221,9 +272,11 @@ fn help() -> Value {
             "call": "run a tool; needs `tool`, optional `arguments` and `request_id`",
             "confirm": "grant confirm:<tool> for this session; needs `tool`",
             "revoke": "withdraw confirm:<tool>; needs `tool`",
+            "audit": "the latest execution records, newest first; optional `limit`",
+            "dead": "jobs in the dead-letter queue; optional `limit`",
             "exit": "end the session",
         },
-        "text": "tools | describe <tool> | confirm <tool> | revoke <tool> | help | exit | <tool> [json] [--request-id <id>]",
+        "text": "tools | describe <tool> | confirm <tool> | revoke <tool> | audit [n] | dead [n] | help | exit | <tool> [json] [--request-id <id>]",
     })
 }
 
@@ -248,6 +301,16 @@ fn parse(line: &str) -> Result<Value, AgentError> {
             Ok(json!({ "op": if word == "quit" { "exit" } else { word } }))
         }
         "describe" | "confirm" | "revoke" => named(word),
+        "audit" | "dead" => {
+            let mut request = json!({ "op": word });
+            if !rest.is_empty() {
+                let n: u64 = rest
+                    .parse()
+                    .map_err(|_| invalid(&format!("`{word}` takes a number, e.g. {word} 50")))?;
+                request["limit"] = n.into();
+            }
+            Ok(request)
+        }
         tool => {
             let (arguments, request_id) = match rest.rsplit_once("--request-id") {
                 Some((arguments, id)) => (arguments.trim(), Some(id.trim())),

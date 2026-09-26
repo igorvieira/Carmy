@@ -130,3 +130,63 @@ async fn text_commands_answer_in_json() {
     assert_eq!(out[5]["result"]["protocol"], "carmy-console/1");
     assert_eq!(out.len(), 6, "exit ends the session");
 }
+
+#[tokio::test]
+async fn audit_and_dead_letters_are_visible_when_attached() {
+    let app = Carmy::new().tool(create_order).tool(wipe);
+    let audit = app.audit();
+    let store = std::sync::Arc::new(carmy::jobs::InMemoryJobStore::default());
+    let (runtime, jobs) = app.jobs(store).build_with_jobs().unwrap();
+    // A job that dies: an unknown tool is not retryable, but one that fails with an
+    // uncertain outcome on a non-idempotent tool is dead-lettered.
+    let id = jobs
+        .enqueue(carmy::runtime::execution_request(
+            "create_order",
+            serde_json::json!({"sku": 1}),
+        ))
+        .await
+        .unwrap();
+    jobs.run_due(10).await.unwrap();
+    let job = jobs.get(&id).await.unwrap().unwrap();
+    assert_eq!(
+        job.status,
+        carmy::jobs::JobStatus::Failed,
+        "invalid arguments never retry"
+    );
+
+    let extras = carmy::console::Extras {
+        audit: Some(audit),
+        jobs: Some(jobs),
+    };
+    let input = "audit 5\n{\"id\":2,\"op\":\"dead\"}\n{\"id\":3,\"op\":\"call\",\"tool\":\"create_order\",\"arguments\":{\"sku\":\"A\"}}\naudit\n";
+    let mut output = Vec::new();
+    carmy::console::serve_with(runtime, "test", extras, input.as_bytes(), &mut output)
+        .await
+        .unwrap();
+    let out: Vec<Value> = String::from_utf8(output)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    // The job's execution is already on the trail; it carries no arguments.
+    let first = &out[1]["result"]["executions"];
+    assert_eq!(first.as_array().unwrap().len(), 1);
+    assert_eq!(first[0]["tool"], "create_order");
+    assert_eq!(first[0]["error_code"], "INVALID_ARGUMENTS");
+    assert!(first[0].get("arguments").is_none());
+    assert_eq!(out[2]["result"]["jobs"].as_array().unwrap().len(), 0);
+    assert_eq!(out[3]["ok"], true);
+    let latest = &out[4]["result"]["executions"];
+    assert_eq!(latest.as_array().unwrap().len(), 2);
+    assert_eq!(latest[0]["status"], "completed");
+    assert_eq!(latest[0]["principal"], "console");
+}
+
+#[tokio::test]
+async fn audit_and_dead_need_their_sources() {
+    let out = session(&["audit", "dead 3", "audit x"]).await;
+    assert_eq!(out[1]["ok"], false);
+    assert_eq!(out[1]["error"]["code"], "UNAVAILABLE");
+    assert_eq!(out[2]["error"]["code"], "UNAVAILABLE");
+    assert_eq!(out[3]["error"]["code"], "INVALID_REQUEST");
+}
