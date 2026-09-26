@@ -18,13 +18,13 @@ mcp = ["dep:carmy-mcp"]
 observability = ["dep:carmy-observability"]
 
 [dependencies]
-carmy-core = { path = "../carmy-core", version = "0.1.0" }
-carmy-schema = { path = "../carmy-schema", version = "0.1.0" }
-carmy-macros = { path = "../carmy-macros", version = "0.1.0" }
-carmy-runtime = { path = "../carmy-runtime", version = "0.1.0" }
-carmy-http = { path = "../carmy-http", version = "0.1.0", optional = true }
-carmy-mcp = { path = "../carmy-mcp", version = "0.1.0", optional = true }
-carmy-observability = { path = "../carmy-observability", version = "0.1.0", optional = true }
+carmy-core = { path = "../carmy-core", version = "0.2.0" }
+carmy-schema = { path = "../carmy-schema", version = "0.2.0" }
+carmy-macros = { path = "../carmy-macros", version = "0.2.0" }
+carmy-runtime = { path = "../carmy-runtime", version = "0.2.0" }
+carmy-http = { path = "../carmy-http", version = "0.2.0", optional = true }
+carmy-mcp = { path = "../carmy-mcp", version = "0.2.0", optional = true }
+carmy-observability = { path = "../carmy-observability", version = "0.2.0", optional = true }
 axum = { version = "0.8", optional = true }
 serde.workspace = true
 serde_json.workspace = true

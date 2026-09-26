@@ -193,7 +193,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "carmy"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "carmy-core",
@@ -214,7 +214,7 @@ dependencies = [
 
 [[package]]
 name = "carmy-benches"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "carmy",
@@ -233,11 +233,11 @@ dependencies = [
 
 [[package]]
 name = "carmy-cli"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "carmy-compare"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "carmy",
@@ -252,7 +252,7 @@ dependencies = [
 
 [[package]]
 name = "carmy-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "schemars",
  "serde",
@@ -262,7 +262,7 @@ dependencies = [
 
 [[package]]
 name = "carmy-http"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "carmy-core",
@@ -279,7 +279,7 @@ dependencies = [
 
 [[package]]
 name = "carmy-macros"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -288,7 +288,7 @@ dependencies = [
 
 [[package]]
 name = "carmy-mcp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "carmy-core",
  "carmy-runtime",
@@ -301,7 +301,7 @@ dependencies = [
 
 [[package]]
 name = "carmy-observability"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "carmy-core",
  "carmy-runtime",
@@ -314,7 +314,7 @@ dependencies = [
 
 [[package]]
 name = "carmy-runtime"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "carmy-core",
  "futures-util",
@@ -330,7 +330,7 @@ dependencies = [
 
 [[package]]
 name = "carmy-schema"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "schemars",
  "serde_json",
@@ -845,7 +845,7 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
 name = "hello-agent"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "carmy",
  "futures-util",
@@ -2067,7 +2067,7 @@ checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
 
 [[package]]
 name = "tool-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "carmy",
  "futures-util",

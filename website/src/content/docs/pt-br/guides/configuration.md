@@ -57,5 +57,5 @@ O `Carmy::new()` ignora por completo o arquivo, o ambiente e o registro automát
 | `observability` | sim | o subscriber de tracing instalado pelo `run()` |
 
 ```toml
-carmy = { version = "0.1", default-features = false, features = ["http"] }
+carmy = { version = "0.2", default-features = false, features = ["http"] }
 ```

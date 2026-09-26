@@ -5,7 +5,7 @@ sidebar:
   order: 6
 ---
 
-Carmy is at `0.1.0`, and its API is unstable.
+Carmy is at `0.2.0`, and its API is unstable during 0.x.
 
 ## Next
 
@@ -16,7 +16,6 @@ Carmy is at `0.1.0`, and its API is unstable.
 - **Transports:** MCP Streamable HTTP, and approvals through MCP elicitation.
 - **Idempotency stores:** durable adapters (Postgres, Redis) as separate crates.
 - **CLI:** `carmy generate tool`.
-- **Release:** the first crates.io release.
 
 ## Out of scope
 

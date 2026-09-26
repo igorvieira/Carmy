@@ -30,7 +30,7 @@ MCP today).
 
 > LLM reasoning can be probabilistic. Side effects should not be.
 
-Status: `0.1.0`, unstable API, not yet published to crates.io.
+Status: `0.2.0` on [crates.io](https://crates.io/crates/carmy). The API is unstable during 0.x.
 
 ## Why Carmy
 

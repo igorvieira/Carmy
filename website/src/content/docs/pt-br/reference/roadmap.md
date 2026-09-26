@@ -5,7 +5,7 @@ sidebar:
   order: 6
 ---
 
-O Carmy está na versão `0.1.0`, e a API é instável.
+O Carmy está na versão `0.2.0`, e a API é instável durante a série 0.x.
 
 ## Próximos passos
 
@@ -16,7 +16,6 @@ O Carmy está na versão `0.1.0`, e a API é instável.
 - **Transportes:** MCP Streamable HTTP e aprovações via elicitation do MCP.
 - **Stores de idempotência:** adaptadores duráveis (Postgres, Redis) em crates separados.
 - **CLI:** `carmy generate tool`.
-- **Release:** a primeira publicação no crates.io.
 
 ## Fora do escopo
 
