@@ -1,0 +1,27 @@
+[package]
+name = "carmy-jobs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Agent-native execution infrastructure: tools that run later, with retries, dead-lettering and schedules"
+readme = "../../README.md"
+keywords = ["agents", "jobs", "queue", "idempotency", "llm"]
+categories = ["asynchronous"]
+
+[dependencies]
+carmy-core = { path = "../carmy-core", version = "0.3.0" }
+carmy-runtime = { path = "../carmy-runtime", version = "0.3.0" }
+chrono = { version = "0.4", features = ["serde"] }
+cron = "0.17"
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "rt"] }
+tokio-util.workspace = true
+tracing.workspace = true
+uuid = { version = "1", features = ["v4", "fast-rng"] }
+
+[dev-dependencies]
+schemars.workspace = true

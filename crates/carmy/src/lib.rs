@@ -53,6 +53,10 @@ pub mod __private {
 pub mod runtime {
     pub use carmy_runtime::*;
 }
+/// Tools that run later: queue, retries, dead letters and schedules.
+pub mod jobs {
+    pub use carmy_jobs::*;
+}
 /// HTTP transport: discovery, tool listing, execution and SSE.
 #[cfg(feature = "http")]
 pub mod http {

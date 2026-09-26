@@ -60,7 +60,16 @@ pub struct Carmy {
     pub(crate) states: StateMap,
     /// Registration waits for `build`, so `.state(..)` may follow `.tool(..)`.
     tools: Vec<Registration>,
+    job_store: Arc<dyn carmy_jobs::JobStore>,
+    retry: carmy_jobs::RetryPolicy,
+    worker_concurrency: usize,
+    schedules: Vec<ScheduleSpec>,
 }
+type ScheduleSpec = (
+    String,
+    String,
+    Box<dyn Fn() -> crate::ExecutionRequest + Send + Sync>,
+);
 type Registration = Box<dyn FnOnce(&mut carmy_runtime::Runtime, &StateMap) -> AgentResult<()>>;
 impl Default for Carmy {
     fn default() -> Self {
@@ -78,7 +87,34 @@ impl Carmy {
             error: None,
             states: StateMap::default(),
             tools: Vec::new(),
+            job_store: Arc::new(carmy_jobs::InMemoryJobStore::default()),
+            retry: carmy_jobs::RetryPolicy::default(),
+            worker_concurrency: 4,
+            schedules: Vec::new(),
         }
+    }
+    /// Where jobs wait. The default is process-local and in memory; use a durable
+    /// store in production.
+    pub fn jobs(mut self, store: Arc<dyn carmy_jobs::JobStore>) -> Self {
+        self.job_store = store;
+        self
+    }
+    /// Retry limits and backoff for jobs.
+    pub fn retry(mut self, policy: carmy_jobs::RetryPolicy) -> Self {
+        self.retry = policy;
+        self
+    }
+    /// Enqueue `make()` on a cron schedule (seven fields, seconds first); see
+    /// [`carmy_jobs::Jobs::every`].
+    pub fn schedule(
+        mut self,
+        name: impl Into<String>,
+        expression: impl Into<String>,
+        make: impl Fn() -> crate::ExecutionRequest + Send + Sync + 'static,
+    ) -> Self {
+        self.schedules
+            .push((name.into(), expression.into(), Box::new(make)));
+        self
     }
     /// Server name advertised by discovery documents.
     pub fn name(mut self, name: impl Into<String>) -> Self {
@@ -106,6 +142,12 @@ impl Carmy {
         }
         if let Some(seconds) = config.timeout_secs {
             self = self.timeout(Duration::from_secs(seconds));
+        }
+        if let Some(concurrency) = config.jobs.concurrency {
+            self.worker_concurrency = concurrency.max(1);
+        }
+        if let Some(max_attempts) = config.jobs.max_attempts {
+            self.retry.max_attempts = max_attempts.max(1);
         }
         #[cfg(feature = "http")]
         {
@@ -150,14 +192,28 @@ impl Carmy {
         self
     }
     /// The shared runtime, for embedding or for serving several transports.
-    pub fn build(mut self) -> Result<Arc<carmy_runtime::Runtime>, Error> {
+    pub fn build(self) -> Result<Arc<carmy_runtime::Runtime>, Error> {
+        self.build_with_jobs().map(|(runtime, _)| runtime)
+    }
+    /// The runtime and the job queue bound to it. Tools may take `State<Jobs>`.
+    pub fn build_with_jobs(
+        mut self,
+    ) -> Result<(Arc<carmy_runtime::Runtime>, carmy_jobs::Jobs), Error> {
         if let Some(error) = self.error {
             return Err(error);
         }
+        let jobs = carmy_jobs::Jobs::unbound(self.job_store).with_retry(self.retry);
+        self.states.insert(jobs.clone());
         for register in self.tools {
             register(&mut self.runtime, &self.states).map_err(Error::Registration)?;
         }
-        Ok(Arc::new(self.runtime))
+        let runtime = Arc::new(self.runtime);
+        jobs.bind(runtime.clone());
+        for (name, expression, make) in self.schedules {
+            jobs.every(name, &expression, make)
+                .map_err(Error::Registration)?;
+        }
+        Ok((runtime, jobs))
     }
     /// The HTTP router, with the per-request protections from [`Carmy::http`].
     #[cfg(feature = "http")]
@@ -204,6 +260,22 @@ impl Carmy {
                 Ok(crate::console::serve(self.build()?, &name, input, tokio::io::stdout()).await?)
             }
             Some("mcp") => self.run_mcp().await,
+            Some("worker") => {
+                let concurrency = self.worker_concurrency;
+                let (_, jobs) = self.build_with_jobs()?;
+                let shutdown = crate::CancellationToken::new();
+                tokio::spawn({
+                    let shutdown = shutdown.clone();
+                    async move {
+                        wait_for_shutdown_signal().await;
+                        eprintln!("carmy: shutting down, finishing running jobs");
+                        shutdown.cancel();
+                    }
+                });
+                eprintln!("carmy: worker running with concurrency {concurrency}");
+                jobs.work(concurrency, shutdown).await;
+                Ok(())
+            }
             Some("tools") => {
                 let catalog = serde_json::to_string_pretty(&self.build()?.tools())
                     .expect("metadata serializes");
@@ -211,7 +283,7 @@ impl Carmy {
                 Ok(())
             }
             Some(other) => Err(Error::Usage(format!(
-                "unknown command `{other}`; expected `server`, `mcp`, `console` or `tools`"
+                "unknown command `{other}`; expected `server`, `worker`, `mcp`, `console` or `tools`"
             ))),
         }
     }
@@ -239,6 +311,20 @@ impl Carmy {
     async fn run_mcp(self) -> Result {
         Err(Error::Usage("the `mcp` feature is disabled".into()))
     }
+}
+
+async fn wait_for_shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut terminate = signal(SignalKind::terminate()).expect("SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = terminate.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = tokio::signal::ctrl_c().await;
 }
 
 /// The conventional application: configuration from `carmy.toml` and `CARMY_*`

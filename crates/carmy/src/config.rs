@@ -18,6 +18,21 @@ pub struct Config {
     /// `[http]` table: connection limits and browser protections.
     #[serde(default)]
     pub http: HttpConfig,
+    /// `[jobs]` table: the worker.
+    #[serde(default)]
+    pub jobs: JobsConfig,
+}
+
+/// ```toml
+/// [jobs]
+/// concurrency = 4      # CARMY_JOBS_CONCURRENCY
+/// max_attempts = 5     # CARMY_JOBS_MAX_ATTEMPTS
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JobsConfig {
+    pub concurrency: Option<usize>,
+    pub max_attempts: Option<u32>,
 }
 
 /// ```toml
@@ -83,6 +98,12 @@ impl Config {
         if let Some(max) = env("CARMY_HTTP_MAX_CONNECTIONS") {
             config.http.max_connections = Some(number("CARMY_HTTP_MAX_CONNECTIONS", max)?);
         }
+        if let Some(n) = env("CARMY_JOBS_CONCURRENCY") {
+            config.jobs.concurrency = Some(number("CARMY_JOBS_CONCURRENCY", n)?);
+        }
+        if let Some(n) = env("CARMY_JOBS_MAX_ATTEMPTS") {
+            config.jobs.max_attempts = Some(number("CARMY_JOBS_MAX_ATTEMPTS", n)?);
+        }
         if let Some(enabled) = env("CARMY_HTTP_SECURITY_HEADERS") {
             config.http.security_headers = Some(match enabled.as_str() {
                 "true" | "1" | "yes" => true,
@@ -129,6 +150,15 @@ mod tests {
                 .unwrap_err()
                 .contains("true or false")
         );
+    }
+    #[test]
+    fn jobs_table_and_env_overrides() {
+        let config = Config::from_sources(Some("[jobs]\nconcurrency = 8"), |key| {
+            (key == "CARMY_JOBS_MAX_ATTEMPTS").then(|| "3".to_string())
+        })
+        .unwrap();
+        assert_eq!(config.jobs.concurrency, Some(8));
+        assert_eq!(config.jobs.max_attempts, Some(3));
     }
     #[test]
     fn typos_and_bad_values_are_reported() {

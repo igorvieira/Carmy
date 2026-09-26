@@ -155,6 +155,13 @@ pub struct ExecutionRequest {
     pub context: AgentContext,
     pub metadata: BTreeMap<String, Value>,
 }
+impl ExecutionRequest {
+    /// The idempotency identity of this request: repeats replay the recorded result.
+    pub fn with_request_id(mut self, request_id: impl Into<String>) -> Self {
+        self.request_id = Some(request_id.into());
+        self
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionStatus {
