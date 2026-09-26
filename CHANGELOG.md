@@ -6,6 +6,8 @@ All notable changes to Carmy are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-26
+
 ### Fixed
 
 - **`carmy_postgres::migrate` no longer shares `_sqlx_migrations` with the
@@ -172,6 +174,7 @@ The first release.
 - **Tracing spans** for every execution, without recording payloads.
 - **Documentation** at https://carmy-pi.vercel.app, in English and Brazilian Portuguese.
 
+[0.4.1]: https://github.com/igorvieira/Carmy/releases/tag/v0.4.1
 [0.4.0]: https://github.com/igorvieira/Carmy/releases/tag/v0.4.0
 [0.3.0]: https://github.com/igorvieira/Carmy/releases/tag/v0.3.0
 [0.2.0]: https://github.com/igorvieira/Carmy/releases/tag/v0.2.0
