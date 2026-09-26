@@ -135,20 +135,20 @@ fn request_id(params: &CallToolRequestParams, ctx: &RequestContext<RoleServer>) 
 /// schema even when `isError` is set. The error travels as JSON text for the model and,
 /// complete, in `_meta["carmy/error"]` for programs.
 fn to_mcp(result: ExecutionResult) -> CallToolResult {
-    let mut meta = json!({
-        "carmy/execution_id": result.execution_id,
-        "carmy/status": result.status,
-    });
+    let mut meta = JsonObject::new();
+    meta.insert("carmy/status".into(), result.status.as_str().into());
+    meta.insert("carmy/execution_id".into(), result.execution_id.into());
     let call = match result.outcome {
         Ok(value @ Value::Object(_)) => CallToolResult::structured(value),
         Ok(value) => CallToolResult::success(vec![ContentBlock::text(value.to_string())]),
         Err(error) => {
-            let body = json!({ "error": error });
-            meta["carmy/error"] = body["error"].clone();
-            CallToolResult::error(vec![ContentBlock::text(body.to_string())])
+            let error = serde_json::to_value(error).expect("AgentError serializes");
+            let text = json!({ "error": &error }).to_string();
+            meta.insert("carmy/error".into(), error);
+            CallToolResult::error(vec![ContentBlock::text(text)])
         }
     };
-    call.with_meta(Some(MetaObject(object(&meta))))
+    call.with_meta(Some(MetaObject(meta)))
 }
 impl ServerHandler for McpServer {
     fn get_info(&self) -> ServerConfig {
@@ -168,21 +168,25 @@ impl ServerHandler for McpServer {
         params: CallToolRequestParams,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
-        if self.runtime.metadata(&params.name).is_none() {
-            let error = AgentError::new("TOOL_NOT_FOUND", "Unknown tool", ErrorCategory::NotFound);
+        let request_id = request_id(&params, &ctx);
+        let arguments = Value::Object(params.arguments.unwrap_or_default());
+        let mut request = execution_request(params.name, arguments);
+        request.request_id = request_id;
+        request.context = self.context.clone();
+        // MCP `notifications/cancelled` cancels this execution only. A child token, so
+        // the runtime's own cancellation (deadline, drop) never marks the MCP request
+        // itself cancelled, which would suppress the response.
+        request.context.cancellation = ctx.ct.child_token();
+        let result = self.runtime.execute(request).await;
+        // An unknown tool is a protocol error, not a tool result.
+        if let Err(error) = &result.outcome
+            && error.code == "TOOL_NOT_FOUND"
+        {
             return Err(McpError::invalid_params(
                 "Unknown tool",
                 Some(json!({ "error": error })),
             ));
         }
-        let mut request = execution_request(
-            params.name.as_ref(),
-            Value::Object(params.arguments.clone().unwrap_or_default()),
-        );
-        request.request_id = request_id(&params, &ctx);
-        request.context = self.context.clone();
-        // MCP `notifications/cancelled` cancels this execution only.
-        request.context.cancellation = ctx.ct.child_token();
-        Ok(to_mcp(self.runtime.execute(request).await).into())
+        Ok(to_mcp(result).into())
     }
 }
