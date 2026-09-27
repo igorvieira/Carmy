@@ -74,7 +74,7 @@ pub struct Carmy {
     worker_liveness: Option<Duration>,
     commands: std::collections::HashMap<String, Command>,
     operator_tools: bool,
-    #[cfg(feature = "postgres")]
+    #[cfg(any(feature = "postgres", feature = "redis"))]
     database: Option<Database>,
     /// Where MCP is served over HTTP, and which `Host` values it accepts.
     #[cfg(all(feature = "http", feature = "mcp"))]
@@ -83,11 +83,11 @@ pub struct Carmy {
     #[cfg(feature = "mcp")]
     mcp_settings: crate::config::McpConfig,
 }
-/// A configured Postgres database: its pool and how long `cleanup` keeps rows.
-#[cfg(feature = "postgres")]
+/// A configured database and how long `cleanup` keeps rows.
+#[cfg(any(feature = "postgres", feature = "redis"))]
 struct Database {
-    pool: carmy_postgres::sqlx::PgPool,
-    retention: carmy_postgres::Retention,
+    backend: crate::database::Backend,
+    retention: crate::Retention,
 }
 /// An app-defined command: receives the builder and runs to completion.
 pub type Command =
@@ -128,7 +128,7 @@ impl Carmy {
             worker_liveness: None,
             commands: std::collections::HashMap::new(),
             operator_tools: false,
-            #[cfg(feature = "postgres")]
+            #[cfg(any(feature = "postgres", feature = "redis"))]
             database: None,
             #[cfg(all(feature = "http", feature = "mcp"))]
             mcp_http: Some(("/mcp".into(), None)),
@@ -159,46 +159,80 @@ impl Carmy {
         self.operator_tools = true;
         self
     }
-    /// Keep jobs, idempotency records and the audit trail in Postgres at `url`
-    /// (`[database] url` in `carmy.toml`, or `DATABASE_URL`). The pool connects on
-    /// first use; `run()` migrates Carmy's tables before any command but `tools`.
-    /// Tools may take `State<PgPool>`, and `State<PostgresJobStore>` for the outbox.
-    /// Adds the `database` readiness check and the `migrate` and `cleanup` commands.
-    #[cfg(feature = "postgres")]
+    /// Keep the app's durable state in the database at `url` (`[database] url` in
+    /// `carmy.toml`, or `DATABASE_URL`); the scheme picks the store:
+    ///
+    /// - `postgres://` (feature `postgres`): jobs, idempotency and the audit trail.
+    ///   Tools may take `State<PgPool>`, and `State<PostgresJobStore>` for the outbox.
+    /// - `redis://` or `rediss://` (feature `redis`): jobs and idempotency; the audit
+    ///   trail stays in memory. Tools may take `State<carmy::redis::Redis>`.
+    ///
+    /// Nothing connects until first use; `run()` migrates before any command but
+    /// `tools`. Adds the `database` readiness check and the `migrate` and `cleanup`
+    /// commands.
+    #[cfg(any(feature = "postgres", feature = "redis"))]
     pub fn database(mut self, url: &str) -> Self {
-        let pool = match carmy_postgres::connect_lazy(url) {
-            Ok(pool) => pool,
-            Err(e) => {
-                self.error = Some(Error::Config(format!("database url: {e}")));
-                return self;
-            }
-        };
-        let store = carmy_postgres::PostgresJobStore::new(pool.clone());
-        self.job_store = Arc::new(store.clone());
-        self.runtime = self
-            .runtime
-            .idempotency_store(Arc::new(carmy_postgres::PostgresIdempotencyStore::new(
-                pool.clone(),
-            )))
-            .sink(Arc::new(carmy_postgres::PostgresAudit::new(pool.clone())));
-        self.states.insert(pool.clone());
-        self.states.insert(store);
-        #[cfg(feature = "http")]
-        {
-            let check = pool.clone();
-            self = self.ready("database", move || carmy_postgres::ready(check.clone()));
-        }
         let retention = self
             .database
             .take()
-            .map_or_else(carmy_postgres::Retention::default, |d| d.retention);
-        self.database = Some(Database { pool, retention });
+            .map_or_else(crate::Retention::default, |d| d.retention);
+        self.database_with(url, retention)
+    }
+    #[cfg(any(feature = "postgres", feature = "redis"))]
+    fn database_with(mut self, url: &str, retention: crate::Retention) -> Self {
+        use crate::database::Backend;
+        let backend = match Backend::open(url) {
+            Ok(backend) => backend,
+            Err(message) => {
+                self.error = Some(Error::Config(message));
+                return self;
+            }
+        };
+        match &backend {
+            #[cfg(feature = "postgres")]
+            Backend::Postgres(pool) => {
+                let store = carmy_postgres::PostgresJobStore::new(pool.clone());
+                self.job_store = Arc::new(store.clone());
+                self.runtime = self
+                    .runtime
+                    .idempotency_store(Arc::new(carmy_postgres::PostgresIdempotencyStore::new(
+                        pool.clone(),
+                    )))
+                    .sink(Arc::new(carmy_postgres::PostgresAudit::new(pool.clone())));
+                self.states.insert(pool.clone());
+                self.states.insert(store);
+                #[cfg(feature = "http")]
+                {
+                    let check = pool.clone();
+                    self = self.ready("database", move || carmy_postgres::ready(check.clone()));
+                }
+            }
+            #[cfg(feature = "redis")]
+            Backend::Redis(redis) => {
+                let redis: &carmy_redis::Redis = redis;
+                let store = carmy_redis::RedisJobStore::new(redis.clone());
+                self.job_store = Arc::new(store.clone());
+                self.runtime = self.runtime.idempotency_store(Arc::new(
+                    carmy_redis::RedisIdempotencyStore::new(redis.clone())
+                        .with_retention(retention.idempotency),
+                ));
+                self.states.insert(redis.clone());
+                self.states.insert(store);
+                #[cfg(feature = "http")]
+                {
+                    let check = redis.clone();
+                    self = self.ready("database", move || carmy_redis::ready(check.clone()));
+                }
+            }
+        }
+        self.database = Some(Database { backend, retention });
         self
     }
-    /// How long the `cleanup` command keeps finished work; see
-    /// [`carmy_postgres::Retention`].
-    #[cfg(feature = "postgres")]
-    pub fn retention(mut self, retention: carmy_postgres::Retention) -> Self {
+    /// How long the `cleanup` command keeps finished work. Set it before
+    /// [`Carmy::database`] for Redis, whose idempotency records expire on their own.
+    #[cfg(any(feature = "postgres", feature = "redis"))]
+    pub fn retention(mut self, retention: impl Into<crate::Retention>) -> Self {
+        let retention = retention.into();
         match &mut self.database {
             Some(database) => database.retention = retention,
             None => {
@@ -338,28 +372,28 @@ impl Carmy {
             }
         }
         if let Some(url) = &config.database.url {
-            #[cfg(feature = "postgres")]
+            #[cfg(any(feature = "postgres", feature = "redis"))]
             {
-                self = self.database(url);
+                // Retention first: Redis sets idempotency expiry when its store opens.
                 let days = |d: u64| Duration::from_secs(d * 24 * 3600);
                 let db = &config.database;
-                if let Some(database) = &mut self.database {
-                    if let Some(d) = db.jobs_retention_days {
-                        database.retention.jobs = days(d);
-                    }
-                    if let Some(d) = db.idempotency_retention_days {
-                        database.retention.idempotency = days(d);
-                    }
-                    if let Some(d) = db.audit_retention_days {
-                        database.retention.audit = days(d);
-                    }
+                let mut retention = crate::Retention::default();
+                if let Some(d) = db.jobs_retention_days {
+                    retention.jobs = days(d);
                 }
+                if let Some(d) = db.idempotency_retention_days {
+                    retention.idempotency = days(d);
+                }
+                if let Some(d) = db.audit_retention_days {
+                    retention.audit = days(d);
+                }
+                self = self.database_with(url, retention);
             }
-            #[cfg(not(feature = "postgres"))]
+            #[cfg(not(any(feature = "postgres", feature = "redis")))]
             {
                 let _ = url;
                 self.error = Some(Error::Config(
-                    "database.url needs carmy's `postgres` feature".into(),
+                    "database.url needs carmy's `postgres` or `redis` feature".into(),
                 ));
             }
         }
@@ -548,18 +582,20 @@ impl Carmy {
             Some("console") => "warn",
             _ => "info",
         });
-        #[cfg(feature = "postgres")]
+        #[cfg(any(feature = "postgres", feature = "redis"))]
         if command != Some("tools")
             && let Some(database) = &self.database
         {
-            carmy_postgres::migrate(&database.pool)
+            database
+                .backend
+                .migrate()
                 .await
                 .map_err(|e| Error::Io(std::io::Error::other(format!("database: {e}"))))?;
         }
         if let Some(run) = command.and_then(|c| self.commands.remove(c)) {
             return run(self).await;
         }
-        #[cfg(feature = "postgres")]
+        #[cfg(any(feature = "postgres", feature = "redis"))]
         if let Some(database) = &self.database {
             match command {
                 // Migrations already ran above.
@@ -568,17 +604,12 @@ impl Carmy {
                     return Ok(());
                 }
                 Some("cleanup") => {
-                    let cleaned = carmy_postgres::cleanup(&database.pool, database.retention)
+                    let cleaned = database
+                        .backend
+                        .cleanup(database.retention)
                         .await
-                        .map_err(|e| Error::Io(std::io::Error::other(e.to_string())))?;
-                    println!(
-                        "{}",
-                        serde_json::json!({
-                            "jobs": cleaned.jobs,
-                            "idempotency": cleaned.idempotency,
-                            "audit": cleaned.audit,
-                        })
-                    );
+                        .map_err(|e| Error::Io(std::io::Error::other(e)))?;
+                    println!("{cleaned}");
                     return Ok(());
                 }
                 _ => {}
@@ -635,7 +666,7 @@ impl Carmy {
             }
             Some(other) => {
                 let mut known: Vec<&str> = vec!["server", "worker", "mcp", "console", "tools"];
-                #[cfg(feature = "postgres")]
+                #[cfg(any(feature = "postgres", feature = "redis"))]
                 if self.database.is_some() {
                     known.extend(["migrate", "cleanup"]);
                 }

@@ -35,6 +35,8 @@ pub use {schemars, serde, serde_json};
 mod app;
 mod config;
 pub mod console;
+#[cfg(any(feature = "postgres", feature = "redis"))]
+mod database;
 mod state;
 pub mod system;
 pub use app::{Carmy, DEFAULT_ADDRESS, Error, Result, app, run};
@@ -63,6 +65,13 @@ pub mod jobs {
 pub mod postgres {
     pub use carmy_postgres::*;
 }
+/// Durable Redis stores for jobs and idempotency.
+#[cfg(feature = "redis")]
+pub mod redis {
+    pub use carmy_redis::*;
+}
+#[cfg(any(feature = "postgres", feature = "redis"))]
+pub use database::Retention;
 /// HTTP transport: discovery, tool listing, execution and SSE.
 #[cfg(feature = "http")]
 pub mod http {
