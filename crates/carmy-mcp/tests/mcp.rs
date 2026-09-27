@@ -273,3 +273,225 @@ async fn progress_tokens_receive_the_tools_reports() {
     assert_eq!(seen[2].total, Some(3.0));
     assert_eq!(seen[2].message.as_deref(), Some("page 3"));
 }
+
+/// A tool that takes a while, so calls to it can outlive the promotion delay.
+struct Slow(std::time::Duration);
+impl Tool for Slow {
+    type Input = Input;
+    type Output = Output;
+    fn metadata(&self) -> ToolMetadata {
+        ToolMetadata {
+            name: "slow".into(),
+            ..Create(Arc::new(AtomicUsize::new(0))).metadata()
+        }
+    }
+    async fn execute(&self, ctx: AgentContext, _: Input) -> AgentResult<Output> {
+        ctx.progress.report(0.0, None, "warming up");
+        tokio::time::sleep(self.0).await;
+        Ok(Output { id: 42 })
+    }
+}
+struct Wipe;
+impl Tool for Wipe {
+    type Input = Input;
+    type Output = Output;
+    fn metadata(&self) -> ToolMetadata {
+        ToolMetadata {
+            name: "wipe".into(),
+            effect: Effect::Destructive,
+            confirmation: Confirmation::Required,
+            ..Create(Arc::new(AtomicUsize::new(0))).metadata()
+        }
+    }
+    async fn execute(&self, _: AgentContext, _: Input) -> AgentResult<Output> {
+        Ok(Output { id: 0 })
+    }
+}
+
+/// A client standing for a person: it may support tasks, and may answer elicitations.
+#[derive(Clone)]
+struct Person {
+    tasks: bool,
+    /// `None`: cannot be asked. `Some(answer)`: says yes or no.
+    confirms: Option<bool>,
+    asked: Arc<AtomicUsize>,
+}
+impl rmcp::ClientHandler for Person {
+    fn get_info(&self) -> rmcp::model::ClientConfig {
+        let capabilities = match (self.tasks, self.confirms.is_some()) {
+            (true, true) => rmcp::model::ClientCapabilities::builder()
+                .enable_elicitation()
+                .enable_tasks()
+                .build(),
+            (true, false) => rmcp::model::ClientCapabilities::builder()
+                .enable_tasks()
+                .build(),
+            (false, true) => rmcp::model::ClientCapabilities::builder()
+                .enable_elicitation()
+                .build(),
+            (false, false) => rmcp::model::ClientCapabilities::default(),
+        };
+        rmcp::model::ClientConfig::new(
+            capabilities,
+            rmcp::model::Implementation::new("person", "1"),
+        )
+    }
+    async fn create_elicitation(
+        &self,
+        _: rmcp::model::ElicitRequestParams,
+        _: rmcp::service::RequestContext<RoleClient>,
+    ) -> Result<rmcp::model::ElicitResult, rmcp::ErrorData> {
+        self.asked.fetch_add(1, Ordering::SeqCst);
+        let yes = self.confirms == Some(true);
+        let mut answer = rmcp::model::ElicitResult::new(if yes {
+            rmcp::model::ElicitationAction::Accept
+        } else {
+            rmcp::model::ElicitationAction::Decline
+        });
+        if yes {
+            answer.content = Some(json!({"confirm": true}));
+        }
+        Ok(answer)
+    }
+}
+
+async fn connect_as(person: Person, server: McpServer) -> RunningService<RoleClient, Person> {
+    let (server_io, client_io) = tokio::io::duplex(64 * 1024);
+    tokio::spawn(async move {
+        let running = server.serve(server_io).await.unwrap();
+        running.waiting().await.unwrap();
+    });
+    person.serve(client_io).await.unwrap()
+}
+fn person(tasks: bool, confirms: Option<bool>) -> Person {
+    Person {
+        tasks,
+        confirms,
+        asked: Arc::new(AtomicUsize::new(0)),
+    }
+}
+fn slow_server(delay_ms: u64) -> McpServer {
+    let runtime = Arc::new(
+        Runtime::new()
+            .tool(Slow(std::time::Duration::from_millis(delay_ms)))
+            .unwrap()
+            .tool(Wipe)
+            .unwrap(),
+    );
+    McpServer::new(runtime).promote_after(Some(std::time::Duration::from_millis(50)))
+}
+
+#[tokio::test]
+async fn slow_calls_become_tasks_the_client_polls() {
+    let client = connect_as(person(true, None), slow_server(300)).await;
+    let response = client
+        .call_tool_once(call("slow", json!({"name": "x"})))
+        .await
+        .unwrap();
+    let rmcp::model::CallToolResponse::Task(created) = response else {
+        panic!("a slow call becomes a task, got {response:?}")
+    };
+    let task_id = created.task.task_id.clone();
+    let mut last = None;
+    for _ in 0..100 {
+        let got = client
+            .get_task(rmcp::model::GetTaskParams::new(task_id.clone()))
+            .await
+            .unwrap();
+        if got.task.task.status.is_terminal() {
+            last = Some(got);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let done = last.expect("the task finishes");
+    let rmcp::model::TaskPayload::Completed { result } = done.task.payload else {
+        panic!("completed, got {:?}", done.task.payload)
+    };
+    assert_eq!(result["structuredContent"], json!({"id": 42}));
+
+    // Fast calls answer inline, even for task-capable clients.
+    let fast = connect_as(person(true, None), slow_server(1)).await;
+    let inline = fast
+        .call_tool_once(call("slow", json!({"name": "x"})))
+        .await
+        .unwrap();
+    assert!(matches!(inline, rmcp::model::CallToolResponse::Complete(_)));
+}
+
+#[tokio::test]
+async fn tasks_can_be_cancelled_and_older_clients_wait_inline() {
+    let client = connect_as(person(true, None), slow_server(5_000)).await;
+    let rmcp::model::CallToolResponse::Task(created) = client
+        .call_tool_once(call("slow", json!({"name": "x"})))
+        .await
+        .unwrap()
+    else {
+        panic!("a task")
+    };
+    let id = created.task.task_id.clone();
+    client
+        .cancel_task(rmcp::model::CancelTaskParams::new(id.clone()))
+        .await
+        .unwrap();
+    let mut status = None;
+    for _ in 0..100 {
+        let got = client
+            .get_task(rmcp::model::GetTaskParams::new(id.clone()))
+            .await
+            .unwrap();
+        if got.task.task.status.is_terminal() {
+            status = Some(got.task.task.status);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(status, Some(rmcp::model::TaskStatus::Cancelled));
+
+    // A client that does not support tasks gets its answer inline, however long.
+    let plain = connect_as(person(false, None), slow_server(200)).await;
+    let result = plain
+        .call_tool(call("slow", json!({"name": "x"})))
+        .await
+        .unwrap();
+    assert_eq!(result.is_error, Some(false));
+}
+
+#[tokio::test]
+async fn confirmation_is_asked_of_the_person_behind_the_client() {
+    let yes = person(false, Some(true));
+    let client = connect_as(yes.clone(), slow_server(1)).await;
+    let result = client
+        .call_tool(call("wipe", json!({"name": "x"})))
+        .await
+        .unwrap();
+    assert_eq!(result.is_error, Some(false), "{result:?}");
+    assert_eq!(yes.asked.load(Ordering::SeqCst), 1);
+
+    let no = person(false, Some(false));
+    let client = connect_as(no.clone(), slow_server(1)).await;
+    let result = client
+        .call_tool(call("wipe", json!({"name": "x"})))
+        .await
+        .unwrap();
+    assert_eq!(result.is_error, Some(true));
+    let meta = result.meta.unwrap();
+    assert_eq!(meta.0["carmy/error"]["code"], "CONFIRMATION_REQUIRED");
+    assert_eq!(no.asked.load(Ordering::SeqCst), 1);
+
+    // A client that cannot ask, or a server told not to, keeps today's error.
+    let mute = connect_as(person(false, None), slow_server(1)).await;
+    let result = mute
+        .call_tool(call("wipe", json!({"name": "x"})))
+        .await
+        .unwrap();
+    assert_eq!(result.is_error, Some(true));
+    let yes = person(false, Some(true));
+    let client = connect_as(yes.clone(), slow_server(1).confirm_by_elicitation(false)).await;
+    let result = client
+        .call_tool(call("wipe", json!({"name": "x"})))
+        .await
+        .unwrap();
+    assert_eq!(result.is_error, Some(true));
+    assert_eq!(yes.asked.load(Ordering::SeqCst), 0, "never asked");
+}

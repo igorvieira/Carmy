@@ -34,6 +34,8 @@ pub struct Config {
 /// http = true                          # serve MCP over HTTP next to the agent routes
 /// path = "/mcp"
 /// allowed_hosts = ["api.example.com"]  # CARMY_MCP_ALLOWED_HOSTS=a,b; default localhost
+/// promote_after_ms = 2000              # slower calls become MCP tasks; 0 never
+/// confirm_by_elicitation = true        # ask the person behind the client to confirm
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -41,6 +43,8 @@ pub struct McpConfig {
     pub http: Option<bool>,
     pub path: Option<String>,
     pub allowed_hosts: Option<Vec<String>>,
+    pub promote_after_ms: Option<u64>,
+    pub confirm_by_elicitation: Option<bool>,
 }
 
 /// ```toml
@@ -248,11 +252,15 @@ mod tests {
     }
     #[test]
     fn mcp_table_and_allowed_hosts_from_the_environment() {
-        let config = Config::from_sources(Some("[mcp]\npath = \"/agents/mcp\""), |key| {
+        let file =
+            "[mcp]\npath = \"/agents/mcp\"\npromote_after_ms = 0\nconfirm_by_elicitation = false";
+        let config = Config::from_sources(Some(file), |key| {
             (key == "CARMY_MCP_ALLOWED_HOSTS").then(|| "api.example.com, 10.0.0.2".to_string())
         })
         .unwrap();
         assert_eq!(config.mcp.path.as_deref(), Some("/agents/mcp"));
+        assert_eq!(config.mcp.promote_after_ms, Some(0));
+        assert_eq!(config.mcp.confirm_by_elicitation, Some(false));
         assert_eq!(
             config.mcp.allowed_hosts,
             Some(vec!["api.example.com".to_string(), "10.0.0.2".to_string()])

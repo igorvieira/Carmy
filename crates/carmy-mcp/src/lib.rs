@@ -2,10 +2,13 @@
 //!
 //! Supported: `initialize`, `ping`, `tools/list` and `tools/call` over any `rmcp`
 //! transport (stdio helper included), request cancellation (`notifications/cancelled`),
-//! and progress: when a `tools/call` carries a `progressToken`, what the tool reports
+//! progress: when a `tools/call` carries a `progressToken`, what the tool reports
 //! through `ctx.progress` arrives as `notifications/progress` (partial results are not
-//! part of MCP progress, so they stay on Carmy's own streams). Resources, prompts and
-//! sampling are not implemented.
+//! part of MCP progress, so they stay on Carmy's own streams); tasks: with clients
+//! that support them, a call outliving [`McpServer::promote_after`] becomes a task
+//! (`tasks/get`, `tasks/cancel`); and confirmation: a tool that needs it is confirmed
+//! by the person behind the client through an elicitation form. Resources, prompts
+//! and sampling are not implemented.
 //!
 //! Mapping:
 //! - Carmy effects become MCP tool annotations (`readOnlyHint`, `destructiveHint`,
@@ -24,14 +27,18 @@ use carmy_runtime::{Runtime, execution_request};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
     model::{
-        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
-        JsonObject, ListToolsResult, MetaObject, PaginatedRequestParams, ProgressNotificationParam,
-        ServerCapabilities, ServerConfig, Tool as McpTool, ToolAnnotations,
+        CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, ContentBlock,
+        CreateTaskResult, ElicitRequestParams, ElicitationAction, ElicitationSchema, GetTaskParams,
+        GetTaskResult, Implementation, JsonObject, ListToolsResult, MetaObject,
+        PaginatedRequestParams, ProgressNotificationParam, ProgressToken, ServerCapabilities,
+        ServerConfig, Tool as McpTool, ToolAnnotations,
     },
-    service::RequestContext,
+    service::{ElicitationMode, RequestContext},
+    task_manager::{TaskExit, TaskManager, TaskOptions},
 };
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
+use tokio_util::sync::CancellationToken;
 
 /// `_meta` key carrying the idempotency identity of a `tools/call`.
 pub const REQUEST_ID_META: &str = "carmy/request_id";
@@ -43,6 +50,9 @@ pub struct McpServer {
     tools: Arc<[McpTool]>,
     name: String,
     execution_meta: bool,
+    tasks: TaskManager,
+    promote_after: Option<Duration>,
+    confirm_by_elicitation: bool,
 }
 impl McpServer {
     pub fn new(runtime: Arc<Runtime>) -> Self {
@@ -53,7 +63,25 @@ impl McpServer {
             tools,
             name: "carmy".into(),
             execution_meta: false,
+            tasks: TaskManager::new(),
+            promote_after: Some(Duration::from_secs(2)),
+            confirm_by_elicitation: true,
         }
+    }
+    /// With clients that support tasks, a call still running after this long becomes a
+    /// task the client polls (`tasks/get`) and may cancel (`tasks/cancel`); faster
+    /// calls answer inline as usual. Default two seconds; `None` never promotes. Tasks
+    /// live in this process for five minutes: for durable work, enqueue a job.
+    pub fn promote_after(mut self, after: Option<Duration>) -> Self {
+        self.promote_after = after;
+        self
+    }
+    /// Ask the person behind the client to confirm a tool that needs it, through an
+    /// elicitation form, instead of failing with `CONFIRMATION_REQUIRED`. On by
+    /// default; turn it off when the client's confirmation must not count.
+    pub fn confirm_by_elicitation(mut self, enabled: bool) -> Self {
+        self.confirm_by_elicitation = enabled;
+        self
     }
     /// Trusted context applied to every call on this connection, e.g. the
     /// authenticated principal or confirmation grants decided by the host.
@@ -213,6 +241,193 @@ fn to_mcp(tool: &str, result: ExecutionResult, execution_meta: bool) -> CallTool
         }
     }
 }
+/// How a call ended: inline, or handed over to a task.
+enum Ran {
+    Done(ExecutionResult),
+    Task(CreateTaskResult),
+}
+
+impl McpServer {
+    /// Run one execution: inline, forwarding progress when the client asked for it,
+    /// or, when the client supports tasks and the call outlives `promote_after`, as a
+    /// task the client polls.
+    async fn run(
+        &self,
+        tool: &str,
+        mut request: ExecutionRequest,
+        ctx: &RequestContext<RoleServer>,
+    ) -> Result<Ran, McpError> {
+        use futures_util::StreamExt;
+        let token = ctx.meta.get_progress_token();
+        let tasks = ctx
+            .client_capabilities()
+            .is_some_and(|c| c.supports_tasks());
+        let Some(promote_after) = self.promote_after.filter(|_| tasks) else {
+            // MCP `notifications/cancelled` cancels this execution only. A child token,
+            // so the runtime's own cancellation (deadline, drop) never marks the MCP
+            // request itself cancelled, which would suppress the response.
+            request.context.cancellation = ctx.ct.child_token();
+            let Some(token) = token else {
+                return Ok(Ran::Done(self.runtime.execute(request).await));
+            };
+            let mut events = self.runtime.execute_stream(request);
+            let mut last = None;
+            while let Some(event) = events.next().await {
+                notify_progress(ctx, &token, &event).await;
+                last = Some(event);
+            }
+            return match last {
+                Some(ExecutionEvent::ExecutionCompleted { result, .. }) => Ok(Ran::Done(result)),
+                _ => Err(McpError::internal_error(
+                    "execution ended without a result",
+                    None,
+                )),
+            };
+        };
+
+        // The execution may outlive this request, so it gets its own token and task.
+        let execution = CancellationToken::new();
+        request.context.cancellation = execution.clone();
+        let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+        let runtime = self.runtime.clone();
+        tokio::spawn(async move {
+            // Driven to the end even if nobody listens any more.
+            let mut stream = runtime.execute_stream(request);
+            while let Some(event) = stream.next().await {
+                let _ = sender.send(event);
+            }
+        });
+        let deadline = tokio::time::sleep(promote_after);
+        tokio::pin!(deadline);
+        let mut cancelled = false;
+        loop {
+            tokio::select! {
+                event = events.recv() => match event {
+                    Some(ExecutionEvent::ExecutionCompleted { result, .. }) => {
+                        return Ok(Ran::Done(result));
+                    }
+                    Some(event) => {
+                        if let Some(token) = &token {
+                            notify_progress(ctx, token, &event).await;
+                        }
+                    }
+                    None => {
+                        return Err(McpError::internal_error("execution ended without a result", None));
+                    }
+                },
+                _ = ctx.ct.cancelled(), if !cancelled => {
+                    execution.cancel();
+                    cancelled = true;
+                }
+                _ = &mut deadline, if !cancelled => break,
+            }
+        }
+
+        // Still running: hand it to a task. Progress becomes the task's status message.
+        let (tool, execution_meta) = (tool.to_owned(), self.execution_meta);
+        let task = self.tasks.spawn(TaskOptions::default(), move |task| {
+            Box::pin(async move {
+                let mut cancelling = false;
+                loop {
+                    tokio::select! {
+                        event = events.recv() => match event {
+                            Some(ExecutionEvent::ExecutionCompleted { result, .. }) => {
+                                if cancelling && result.status == ExecutionStatus::Cancelled {
+                                    return Err(TaskExit::Cancelled);
+                                }
+                                return Ok(to_mcp(&tool, result, execution_meta));
+                            }
+                            Some(ExecutionEvent::ToolProgress { message: Some(message), .. }) => {
+                                task.set_status_message(message);
+                            }
+                            Some(_) => {}
+                            None => {
+                                return Err(TaskExit::Error(McpError::internal_error(
+                                    "execution ended without a result",
+                                    None,
+                                )));
+                            }
+                        },
+                        _ = task.cancelled(), if !cancelling => {
+                            execution.cancel();
+                            cancelling = true;
+                        }
+                    }
+                }
+            })
+        });
+        Ok(Ran::Task(CreateTaskResult::new(task)))
+    }
+
+    /// Ask the person behind the client to confirm `tool`, through an elicitation
+    /// form. False when the client cannot ask, or the person does not accept.
+    async fn confirm(
+        &self,
+        tool: &str,
+        arguments: &Value,
+        ctx: &RequestContext<RoleServer>,
+    ) -> bool {
+        if !self.confirm_by_elicitation
+            || !ctx
+                .peer
+                .supported_elicitation_modes()
+                .contains(&ElicitationMode::Form)
+        {
+            return false;
+        }
+        let Ok(schema) = ElicitationSchema::builder()
+            .required_bool("confirm")
+            .build()
+        else {
+            return false;
+        };
+        let params = ElicitRequestParams::FormElicitationParams {
+            meta: None,
+            message: format!(
+                "`{tool}` needs your confirmation before it runs with {arguments}. Allow it?"
+            ),
+            requested_schema: schema,
+        };
+        match ctx.peer.create_elicitation(params).await {
+            Ok(answer) => {
+                answer.action == ElicitationAction::Accept
+                    && answer
+                        .content
+                        .as_ref()
+                        .and_then(|c| c.get("confirm"))
+                        .and_then(Value::as_bool)
+                        == Some(true)
+            }
+            Err(_) => false,
+        }
+    }
+}
+
+/// Forward a progress event as `notifications/progress`. Best effort: a client that
+/// stopped listening still gets its answer.
+async fn notify_progress(
+    ctx: &RequestContext<RoleServer>,
+    token: &ProgressToken,
+    event: &ExecutionEvent,
+) {
+    if let ExecutionEvent::ToolProgress {
+        progress,
+        total,
+        message,
+        ..
+    } = event
+    {
+        let mut update = ProgressNotificationParam::new(token.clone(), *progress);
+        if let Some(total) = total {
+            update = update.with_total(*total);
+        }
+        if let Some(message) = message {
+            update = update.with_message(message.clone());
+        }
+        let _ = ctx.peer.notify_progress(update).await;
+    }
+}
+
 /// The `AgentContext` a host's middleware put on the HTTP request, when served over HTTP.
 #[cfg(feature = "http")]
 fn host_context(ctx: &RequestContext<RoleServer>) -> Option<AgentContext> {
@@ -228,9 +443,17 @@ fn host_context(_: &RequestContext<RoleServer>) -> Option<AgentContext> {
 }
 impl ServerHandler for McpServer {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(
-            Implementation::new(self.name.clone(), env!("CARGO_PKG_VERSION")),
-        )
+        ServerConfig::new(match self.promote_after {
+            Some(_) => ServerCapabilities::builder()
+                .enable_tools()
+                .enable_tasks()
+                .build(),
+            None => ServerCapabilities::builder().enable_tools().build(),
+        })
+        .with_server_info(Implementation::new(
+            self.name.clone(),
+            env!("CARGO_PKG_VERSION"),
+        ))
     }
     async fn list_tools(
         &self,
@@ -247,55 +470,52 @@ impl ServerHandler for McpServer {
         let request_id = request_id(&params, &ctx);
         let tool = params.name.to_string();
         let arguments = Value::Object(params.arguments.unwrap_or_default());
-        let mut request = execution_request(params.name, arguments);
-        request.request_id = request_id;
-        request.context = host_context(&ctx).unwrap_or_else(|| self.context.clone());
-        // MCP `notifications/cancelled` cancels this execution only. A child token, so
-        // the runtime's own cancellation (deadline, drop) never marks the MCP request
-        // itself cancelled, which would suppress the response.
-        request.context.cancellation = ctx.ct.child_token();
-        let result = match ctx.meta.get_progress_token() {
-            None => self.runtime.execute(request).await,
-            // A client asking for progress gets the tool's reports as notifications.
-            Some(token) => {
-                use futures_util::StreamExt;
-                let mut events = self.runtime.execute_stream(request);
-                let mut last = None;
-                while let Some(event) = events.next().await {
-                    if let ExecutionEvent::ToolProgress {
-                        progress,
-                        total,
-                        message,
-                        ..
-                    } = &event
-                    {
-                        let mut update = ProgressNotificationParam::new(token.clone(), *progress);
-                        if let Some(total) = total {
-                            update = update.with_total(*total);
-                        }
-                        if let Some(message) = message {
-                            update = update.with_message(message.clone());
-                        }
-                        // Best effort: a client that stopped listening still gets its answer.
-                        let _ = ctx.peer.notify_progress(update).await;
-                    }
-                    last = Some(event);
-                }
-                match last {
-                    Some(ExecutionEvent::ExecutionCompleted { result, .. }) => result,
-                    _ => unreachable!("an execution stream always ends with ExecutionCompleted"),
-                }
+        let mut context = host_context(&ctx).unwrap_or_else(|| self.context.clone());
+        let mut asked = false;
+        loop {
+            let mut request = execution_request(tool.clone(), arguments.clone());
+            request.request_id = request_id.clone();
+            request.context = context.clone();
+            let result = match self.run(&tool, request, &ctx).await? {
+                Ran::Task(task) => return Ok(CallToolResponse::Task(task)),
+                Ran::Done(result) => result,
+            };
+            // An unknown tool is a protocol error, not a tool result.
+            if let Err(error) = &result.outcome
+                && error.code == "TOOL_NOT_FOUND"
+            {
+                return Err(McpError::invalid_params(
+                    "Unknown tool",
+                    Some(json!({ "error": error })),
+                ));
             }
-        };
-        // An unknown tool is a protocol error, not a tool result.
-        if let Err(error) = &result.outcome
-            && error.code == "TOOL_NOT_FOUND"
-        {
-            return Err(McpError::invalid_params(
-                "Unknown tool",
-                Some(json!({ "error": error })),
-            ));
+            // A tool that needs confirmation: ask the person behind the client, once.
+            let needs_confirmation = matches!(
+                &result.outcome,
+                Err(error) if error.code == "CONFIRMATION_REQUIRED"
+            );
+            if needs_confirmation && !asked && self.confirm(&tool, &arguments, &ctx).await {
+                context.permissions.insert(format!("confirm:{tool}"));
+                asked = true;
+                continue;
+            }
+            return Ok(to_mcp(&tool, result, self.execution_meta).into());
         }
-        Ok(to_mcp(&tool, result, self.execution_meta).into())
+    }
+    async fn get_task(
+        &self,
+        request: GetTaskParams,
+        _: RequestContext<RoleServer>,
+    ) -> Result<GetTaskResult, McpError> {
+        self.tasks
+            .get_task(&request.task_id)
+            .map(GetTaskResult::new)
+    }
+    async fn cancel_task(
+        &self,
+        request: CancelTaskParams,
+        _: RequestContext<RoleServer>,
+    ) -> Result<(), McpError> {
+        self.tasks.cancel_task(&request.task_id)
     }
 }

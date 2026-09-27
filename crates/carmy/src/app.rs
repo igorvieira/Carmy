@@ -79,6 +79,9 @@ pub struct Carmy {
     /// Where MCP is served over HTTP, and which `Host` values it accepts.
     #[cfg(all(feature = "http", feature = "mcp"))]
     mcp_http: Option<(String, Option<Vec<String>>)>,
+    /// `[mcp]` settings applied to every MCP server this app builds.
+    #[cfg(feature = "mcp")]
+    mcp_settings: crate::config::McpConfig,
 }
 /// A configured Postgres database: its pool and how long `cleanup` keeps rows.
 #[cfg(feature = "postgres")]
@@ -129,6 +132,8 @@ impl Carmy {
             database: None,
             #[cfg(all(feature = "http", feature = "mcp"))]
             mcp_http: Some(("/mcp".into(), None)),
+            #[cfg(feature = "mcp")]
+            mcp_settings: Default::default(),
         }
     }
     /// Serve MCP over Streamable HTTP at `path`, next to the agent routes and behind
@@ -314,6 +319,10 @@ impl Carmy {
         if let Some(max_attempts) = config.jobs.max_attempts {
             self.retry.max_attempts = max_attempts.max(1);
         }
+        #[cfg(feature = "mcp")]
+        {
+            self.mcp_settings = config.mcp.clone();
+        }
         #[cfg(all(feature = "http", feature = "mcp"))]
         {
             let mcp = &config.mcp;
@@ -454,6 +463,8 @@ impl Carmy {
         let worker_liveness = self.worker_liveness;
         #[cfg(feature = "mcp")]
         let mcp_http = self.mcp_http.take();
+        #[cfg(feature = "mcp")]
+        let settings = self.mcp_settings.clone();
         #[cfg(not(feature = "mcp"))]
         let mcp_http: Option<(String, Option<Vec<String>>)> = None;
         let (runtime, jobs) = self.build_with_jobs()?;
@@ -488,9 +499,7 @@ impl Carmy {
             .merge(carmy_http::health_router(readiness));
         #[cfg(feature = "mcp")]
         if let Some((path, hosts)) = mcp_http {
-            let service = carmy_mcp::McpServer::new(runtime)
-                .name(name)
-                .http_service(hosts);
+            let service = mcp_server(runtime, name, &settings).http_service(hosts);
             router = router.nest_service(&path, service);
         }
         for own in routes {
@@ -507,8 +516,8 @@ impl Carmy {
     }
     #[cfg(feature = "mcp")]
     pub fn mcp(self) -> Result<carmy_mcp::McpServer, Error> {
-        let name = self.name.clone();
-        Ok(carmy_mcp::McpServer::new(self.build()?).name(name))
+        let (name, settings) = (self.name.clone(), self.mcp_settings.clone());
+        Ok(mcp_server(self.build()?, name, &settings))
     }
     /// Serve one MCP client over stdin/stdout.
     #[cfg(feature = "mcp")]
@@ -662,6 +671,23 @@ impl Carmy {
     async fn run_mcp(self) -> Result {
         Err(Error::Usage("the `mcp` feature is disabled".into()))
     }
+}
+
+/// An MCP server over `runtime`, with the app's `[mcp]` settings.
+#[cfg(feature = "mcp")]
+fn mcp_server(
+    runtime: Arc<carmy_runtime::Runtime>,
+    name: String,
+    settings: &crate::config::McpConfig,
+) -> carmy_mcp::McpServer {
+    let mut server = carmy_mcp::McpServer::new(runtime).name(name);
+    if let Some(ms) = settings.promote_after_ms {
+        server = server.promote_after((ms > 0).then(|| Duration::from_millis(ms)));
+    }
+    if let Some(enabled) = settings.confirm_by_elicitation {
+        server = server.confirm_by_elicitation(enabled);
+    }
+    server
 }
 
 async fn wait_for_shutdown_signal() {
