@@ -24,6 +24,23 @@ pub struct Config {
     /// `[database]` table: Postgres for jobs, idempotency and audit.
     #[serde(default)]
     pub database: DatabaseConfig,
+    /// `[mcp]` table: MCP over HTTP.
+    #[serde(default)]
+    pub mcp: McpConfig,
+}
+
+/// ```toml
+/// [mcp]
+/// http = true                          # serve MCP over HTTP next to the agent routes
+/// path = "/mcp"
+/// allowed_hosts = ["api.example.com"]  # CARMY_MCP_ALLOWED_HOSTS=a,b; default localhost
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpConfig {
+    pub http: Option<bool>,
+    pub path: Option<String>,
+    pub allowed_hosts: Option<Vec<String>>,
 }
 
 /// ```toml
@@ -136,6 +153,16 @@ impl Config {
         if let Some(url) = env("CARMY_DATABASE_URL").or_else(|| env("DATABASE_URL")) {
             config.database.url = Some(url);
         }
+        if let Some(hosts) = env("CARMY_MCP_ALLOWED_HOSTS") {
+            config.mcp.allowed_hosts = Some(
+                hosts
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|h| !h.is_empty())
+                    .map(str::to_owned)
+                    .collect(),
+            );
+        }
         if let Some(n) = env("CARMY_JOBS_CONCURRENCY") {
             config.jobs.concurrency = Some(number("CARMY_JOBS_CONCURRENCY", n)?);
         }
@@ -217,6 +244,18 @@ mod tests {
         assert!(
             !format!("{config:?}").contains("postgres://"),
             "the URL is redacted"
+        );
+    }
+    #[test]
+    fn mcp_table_and_allowed_hosts_from_the_environment() {
+        let config = Config::from_sources(Some("[mcp]\npath = \"/agents/mcp\""), |key| {
+            (key == "CARMY_MCP_ALLOWED_HOSTS").then(|| "api.example.com, 10.0.0.2".to_string())
+        })
+        .unwrap();
+        assert_eq!(config.mcp.path.as_deref(), Some("/agents/mcp"));
+        assert_eq!(
+            config.mcp.allowed_hosts,
+            Some(vec!["api.example.com".to_string(), "10.0.0.2".to_string()])
         );
     }
     #[test]

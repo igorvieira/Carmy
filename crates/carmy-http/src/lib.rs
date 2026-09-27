@@ -172,7 +172,7 @@ struct HttpState {
 /// authentication; request bodies can never set context. Apply authentication to the
 /// entire router if tool names and schemas are private.
 pub fn router(runtime: Arc<Runtime>, server: impl Into<String>) -> Router {
-    agent_router(runtime, server.into(), Vec::new())
+    agent_router(runtime, server.into(), Vec::new(), None)
 }
 /// [`router`] plus webhooks: one `POST` route each, listed in discovery so agents see
 /// where each door leads. `enqueuer` runs the hooks that [`Webhook::enqueue`].
@@ -182,15 +182,48 @@ pub fn router_with_webhooks(
     hooks: impl IntoIterator<Item = (String, Webhook)>,
     enqueuer: Option<Arc<dyn Enqueue>>,
 ) -> Result<Router, AgentError> {
-    let hooks: Vec<(String, Webhook)> = hooks.into_iter().collect();
-    let described = hooks
+    agent_routes(
+        runtime,
+        server,
+        AgentRoutes {
+            webhooks: hooks.into_iter().collect(),
+            enqueuer,
+            mcp_url: None,
+        },
+    )
+}
+
+/// What the agent router serves besides the tools, all of it advertised in discovery.
+#[derive(Default)]
+pub struct AgentRoutes {
+    pub webhooks: Vec<(String, Webhook)>,
+    /// Runs the hooks that [`Webhook::enqueue`].
+    pub enqueuer: Option<Arc<dyn Enqueue>>,
+    /// Where an MCP endpoint is mounted next to these routes, if any. The caller
+    /// mounts it; discovery only points at it.
+    pub mcp_url: Option<String>,
+}
+
+/// The agent routes, webhooks included, with a discovery document that lists them.
+pub fn agent_routes(
+    runtime: Arc<Runtime>,
+    server: impl Into<String>,
+    routes: AgentRoutes,
+) -> Result<Router, AgentError> {
+    let described = routes
+        .webhooks
         .iter()
         .map(|(path, hook)| hook.describe(path))
         .collect();
-    let webhooks = webhooks::webhook_routes(&runtime, hooks, enqueuer)?;
-    Ok(agent_router(runtime, server.into(), described).merge(webhooks))
+    let webhooks = webhooks::webhook_routes(&runtime, routes.webhooks, routes.enqueuer)?;
+    Ok(agent_router(runtime, server.into(), described, routes.mcp_url).merge(webhooks))
 }
-fn agent_router(runtime: Arc<Runtime>, server: String, webhooks: Vec<Value>) -> Router {
+fn agent_router(
+    runtime: Arc<Runtime>,
+    server: String,
+    webhooks: Vec<Value>,
+    mcp_url: Option<String>,
+) -> Router {
     let metadata = runtime.tools();
     let tools: Vec<ToolDto> = metadata.iter().map(ToolDto::from).collect();
     let tools = Document::new(json!({ "tools": tools }));
@@ -209,6 +242,13 @@ fn agent_router(runtime: Arc<Runtime>, server: String, webhooks: Vec<Value>) -> 
             .expect("an array")
             .push("webhooks".into());
         discovery["webhooks"] = webhooks.into();
+    }
+    if let Some(url) = mcp_url {
+        discovery["capabilities"]
+            .as_array_mut()
+            .expect("an array")
+            .push("mcp".into());
+        discovery["mcp_url"] = url.into();
     }
     let discovery = Document::new(discovery);
     let state = HttpState {

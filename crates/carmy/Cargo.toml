@@ -13,7 +13,8 @@ categories = ["asynchronous", "web-programming"]
 
 [features]
 default = ["http", "mcp", "observability"]
-http = ["dep:carmy-http", "dep:axum"]
+# With `mcp`, also serves MCP over Streamable HTTP at /mcp.
+http = ["dep:carmy-http", "dep:axum", "carmy-mcp?/http"]
 mcp = ["dep:carmy-mcp"]
 observability = ["dep:carmy-observability"]
 postgres = ["dep:carmy-postgres"]
@@ -38,6 +39,7 @@ futures-util = "0.3"
 toml = { version = "1", default-features = false, features = ["parse", "serde"] }
 
 [dev-dependencies]
+rmcp = { version = "3.4", default-features = false, features = ["client", "transport-streamable-http-client-reqwest"] }
 trybuild = "1"
 axum = "0.8"
 hex = "0.4"

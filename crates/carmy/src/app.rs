@@ -76,6 +76,9 @@ pub struct Carmy {
     operator_tools: bool,
     #[cfg(feature = "postgres")]
     database: Option<Database>,
+    /// Where MCP is served over HTTP, and which `Host` values it accepts.
+    #[cfg(all(feature = "http", feature = "mcp"))]
+    mcp_http: Option<(String, Option<Vec<String>>)>,
 }
 /// A configured Postgres database: its pool and how long `cleanup` keeps rows.
 #[cfg(feature = "postgres")]
@@ -124,7 +127,24 @@ impl Carmy {
             operator_tools: false,
             #[cfg(feature = "postgres")]
             database: None,
+            #[cfg(all(feature = "http", feature = "mcp"))]
+            mcp_http: Some(("/mcp".into(), None)),
         }
+    }
+    /// Serve MCP over Streamable HTTP at `path`, next to the agent routes and behind
+    /// the same protections. On by default at `/mcp`. `allowed_hosts` lists the `Host`
+    /// values accepted, a guard against DNS rebinding; `None` accepts localhost only,
+    /// so list your public hosts in production.
+    #[cfg(all(feature = "http", feature = "mcp"))]
+    pub fn mcp_http(mut self, path: impl Into<String>, allowed_hosts: Option<Vec<String>>) -> Self {
+        self.mcp_http = Some((path.into(), allowed_hosts));
+        self
+    }
+    /// Serve MCP over stdio only.
+    #[cfg(all(feature = "http", feature = "mcp"))]
+    pub fn without_mcp_http(mut self) -> Self {
+        self.mcp_http = None;
+        self
     }
     /// Add `carmy_dead_letters` and `carmy_audit`, read-only tools that show the
     /// dead-letter queue and the latest executions to agents. They reveal who ran
@@ -294,6 +314,20 @@ impl Carmy {
         if let Some(max_attempts) = config.jobs.max_attempts {
             self.retry.max_attempts = max_attempts.max(1);
         }
+        #[cfg(all(feature = "http", feature = "mcp"))]
+        {
+            let mcp = &config.mcp;
+            if mcp.http == Some(false) {
+                self.mcp_http = None;
+            } else if let Some((path, hosts)) = &mut self.mcp_http {
+                if let Some(configured) = &mcp.path {
+                    *path = configured.clone();
+                }
+                if mcp.allowed_hosts.is_some() {
+                    *hosts = mcp.allowed_hosts.clone();
+                }
+            }
+        }
         if let Some(url) = &config.database.url {
             #[cfg(feature = "postgres")]
             {
@@ -418,6 +452,10 @@ impl Carmy {
         let mut readiness = std::mem::take(&mut self.readiness);
         let routes = std::mem::take(&mut self.routes);
         let worker_liveness = self.worker_liveness;
+        #[cfg(feature = "mcp")]
+        let mcp_http = self.mcp_http.take();
+        #[cfg(not(feature = "mcp"))]
+        let mcp_http: Option<(String, Option<Vec<String>>)> = None;
         let (runtime, jobs) = self.build_with_jobs()?;
         if let Some(within) = worker_liveness {
             let jobs = jobs.clone();
@@ -440,9 +478,21 @@ impl Carmy {
             ));
         }
         let queue: Arc<dyn carmy_http::Enqueue> = Arc::new(JobQueue(jobs.clone()));
-        let mut router = carmy_http::router_with_webhooks(runtime, name, webhooks, Some(queue))
+        let agent = carmy_http::AgentRoutes {
+            webhooks,
+            enqueuer: Some(queue),
+            mcp_url: mcp_http.as_ref().map(|(path, _)| path.clone()),
+        };
+        let mut router = carmy_http::agent_routes(runtime.clone(), name.clone(), agent)
             .map_err(Error::Registration)?
             .merge(carmy_http::health_router(readiness));
+        #[cfg(feature = "mcp")]
+        if let Some((path, hosts)) = mcp_http {
+            let service = carmy_mcp::McpServer::new(runtime)
+                .name(name)
+                .http_service(hosts);
+            router = router.nest_service(&path, service);
+        }
         for own in routes {
             router = router.merge(own);
         }

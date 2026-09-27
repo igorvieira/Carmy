@@ -72,6 +72,31 @@ impl McpServer {
         self.execution_meta = enabled;
         self
     }
+    /// MCP over Streamable HTTP, as a tower service: mount it in a router with
+    /// `nest_service("/mcp", ..)`. Sessions stay in memory. `allowed_hosts` guards
+    /// against DNS rebinding by checking `Host`; `None` keeps rmcp's default
+    /// (localhost only). List your public hosts in production.
+    ///
+    /// When the request carries an `AgentContext` extension (inserted by the host's
+    /// authentication middleware, as for Carmy's HTTP routes), calls use it instead
+    /// of [`McpServer::context`].
+    #[cfg(feature = "http")]
+    pub fn http_service(
+        self,
+        allowed_hosts: Option<Vec<String>>,
+    ) -> rmcp::transport::streamable_http_server::StreamableHttpService<
+        Self,
+        rmcp::transport::streamable_http_server::session::local::LocalSessionManager,
+    > {
+        use rmcp::transport::streamable_http_server::{
+            StreamableHttpServerConfig, StreamableHttpService,
+        };
+        let mut config = StreamableHttpServerConfig::default();
+        if let Some(hosts) = allowed_hosts {
+            config = config.with_allowed_hosts(hosts);
+        }
+        StreamableHttpService::new(move || Ok(self.clone()), Default::default(), config)
+    }
     /// Serve a single client over stdin/stdout until it disconnects.
     pub async fn serve_stdio(self) -> std::io::Result<()> {
         let running = match stdio::pipes() {
@@ -188,6 +213,19 @@ fn to_mcp(tool: &str, result: ExecutionResult, execution_meta: bool) -> CallTool
         }
     }
 }
+/// The `AgentContext` a host's middleware put on the HTTP request, when served over HTTP.
+#[cfg(feature = "http")]
+fn host_context(ctx: &RequestContext<RoleServer>) -> Option<AgentContext> {
+    ctx.extensions
+        .get::<http::request::Parts>()?
+        .extensions
+        .get::<AgentContext>()
+        .cloned()
+}
+#[cfg(not(feature = "http"))]
+fn host_context(_: &RequestContext<RoleServer>) -> Option<AgentContext> {
+    None
+}
 impl ServerHandler for McpServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(
@@ -211,7 +249,7 @@ impl ServerHandler for McpServer {
         let arguments = Value::Object(params.arguments.unwrap_or_default());
         let mut request = execution_request(params.name, arguments);
         request.request_id = request_id;
-        request.context = self.context.clone();
+        request.context = host_context(&ctx).unwrap_or_else(|| self.context.clone());
         // MCP `notifications/cancelled` cancels this execution only. A child token, so
         // the runtime's own cancellation (deadline, drop) never marks the MCP request
         // itself cancelled, which would suppress the response.
