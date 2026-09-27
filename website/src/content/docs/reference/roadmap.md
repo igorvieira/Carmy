@@ -9,18 +9,18 @@ Carmy is at `0.5.0`, and its API is unstable during 0.x.
 
 ## Next
 
-- **Execution plans:** DAGs of tool calls with `$step.field` references, on top of the
-  existing runtime.
-- **Tool progress events:** progress and partial results emitted by tools into the event
-  stream.
-- **Transports:** MCP Streamable HTTP, approvals through MCP elicitation, and MCP tasks
-  on top of [jobs](/guides/jobs/).
-- **Stores:** a Redis job and idempotency store next to the Postgres one.
-- **Console:** the audit trail and the dead-letter queue in the terminal UI, not only
-  over the protocol.
-- **Sources of tools:** adapters that turn an existing GraphQL or OpenAPI API into Carmy
-  tools, so its operations get effects, confirmation and replay-safe retries before an
-  agent touches them. GraphQL is not a transport: agents call tools over MCP and HTTP.
+- **GraphQL as a source of tools:** operations from a GraphQL schema and an operations
+  file become tools, the way [OpenAPI](/guides/openapi/) operations do. GraphQL is not a
+  transport: agents call tools over MCP and HTTP.
+- **OpenAPI in YAML**, next to JSON.
+- **Next actions from tools:** tools suggesting their own follow-ups, next to the ones
+  Carmy already knows.
+- **Durable MCP tasks:** MCP tasks backed by [jobs](/guides/jobs/), so they survive a
+  restart.
+- **Audit on Redis**, next to Postgres.
+
+Execution plans (DAGs of tool calls) are no longer planned: composition stays with the
+agent, or with tools that enqueue other tools.
 
 ## Out of scope
 

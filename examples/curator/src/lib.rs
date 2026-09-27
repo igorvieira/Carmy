@@ -188,16 +188,21 @@ pub struct Collected {
     register = false
 )]
 async fn collect_offers(
+    ctx: AgentContext,
     State(source): State<Source>,
     State(jobs): State<Jobs>,
 ) -> AgentResult<Collected> {
     let mut enqueued = 0;
+    let total = source.0.len() as f64;
     for offer in source.0.iter() {
         // The offer id is the job's identity: collecting twice never processes twice.
         let request = execution_request("process_offer", json!({ "offer": offer }))
             .with_request_id(format!("process-{}", offer.id));
         jobs.enqueue(request).await?;
         enqueued += 1;
+        // Visible over SSE, in the console and to MCP clients that asked for progress.
+        ctx.progress
+            .report(enqueued as f64, Some(total), format!("queued {}", offer.id));
     }
     Ok(Collected {
         offers: source.0.len(),

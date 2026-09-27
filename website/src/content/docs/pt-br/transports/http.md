@@ -24,7 +24,8 @@ das requisições é limitado a 1 MiB.
 O `tools_version` só muda quando o catálogo muda, então os agentes podem guardar o
 catálogo em cache em vez de baixá-lo de novo. Um app com [webhooks](/pt-br/guides/webhooks/)
 acrescenta `"webhooks"` a `capabilities` e lista cada um (caminho, tool, modo, pointer de
-identidade), nunca com o segredo.
+identidade), nunca com o segredo. Com [MCP por HTTP](/pt-br/transports/mcp/#por-http), o
+`mcp_url` aponta para ele e `capabilities` inclui `"mcp"`.
 
 ## `GET /agent/tools`
 
@@ -73,7 +74,27 @@ servidos com `ETag` e `Cache-Control: private, max-age=60`. Uma requisição com
 - As falhas trazem [`error`](/pt-br/guides/errors/) no lugar de `data`.
 - `_agent.cacheable` é `true` quando um resultado pode ser reaproveitado: uma chamada bem
   sucedida a uma tool idempotente com efeito `read` ou `none`.
+- `_agent.next_actions` lista o que fazer em seguida, quando o Carmy sabe; veja abaixo.
 - As respostas são enviadas com `Cache-Control: no-store`.
+
+### Próximas ações
+
+```json
+"_agent": { "cacheable": false, "next_actions": [
+  { "tool": "publish", "reason": "Retry the same call with the same request_id", "after_ms": 5000 }
+] }
+```
+
+| depois de | o Carmy sugere |
+|-----------|----------------|
+| um erro retryable | a mesma chamada, mesmo `request_id`, depois do `retry_after` |
+| `CONFIRMATION_REQUIRED` | a mesma chamada, depois que uma pessoa confirmar |
+| `carmy_job` de um job ainda na fila ou rodando | `carmy_job` de novo, em um segundo |
+| uma entrega de webhook enfileirada (`202`) | `carmy_job` com o novo `job_id` |
+
+Sem `arguments` quer dizer os mesmos argumentos. Uma lista vazia quer dizer que não há o
+que sugerir. A mesma lista vai nas respostas do console e no
+`_meta["carmy/next_actions"]` dos resultados do MCP.
 
 ### Status codes
 
@@ -90,8 +111,13 @@ retornam `413 PAYLOAD_TOO_LARGE`.
 
 ## Streaming
 
-Adicione `Accept: text/event-stream` para receber [Server-Sent Events](/pt-br/guides/streaming/).
-Se o cliente desconectar, a execução é cancelada.
+Adicione `Accept: text/event-stream` para receber [Server-Sent Events](/pt-br/guides/streaming/),
+inclusive o `tool.progress` da tool. Se o cliente desconectar, a execução é cancelada.
+
+## MCP
+
+Com a feature `mcp`, o mesmo router serve [MCP por HTTP](/pt-br/transports/mcp/#por-http)
+em `/mcp`; a descoberta o lista como `mcp_url`.
 
 ## Embutindo o router
 

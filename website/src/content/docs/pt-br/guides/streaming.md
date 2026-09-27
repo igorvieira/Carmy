@@ -12,10 +12,36 @@ transporte:
 |--------|--------|
 | `execution.started` | sempre primeiro |
 | `tool.started` | a tool vai rodar (depois das policies, da validação e da idempotência) |
+| `tool.progress` | a tool reportou progresso ou um resultado parcial; quantas vezes reportar |
 | `tool.completed` | a tool terminou, com `duration_ms` e `ok` |
 | `execution.completed` | sempre por último, com o resultado completo e `replayed` |
 
 Resultados reenviados e rejeições antecipadas não geram os eventos `tool.*`.
+
+## Progresso
+
+As tools reportam por `ctx.progress`. Sem ninguém ouvindo, a chamada não faz nada, então
+reporte à vontade:
+
+```rust
+#[carmy::tool(description = "Importa um catálogo", effect = "write")]
+async fn import_catalog(ctx: AgentContext, input: Import) -> AgentResult<Imported> {
+    let pages = fetch_index(&input.url).await?;
+    for (i, page) in pages.iter().enumerate() {
+        let items = import_page(page).await?;
+        ctx.progress.report((i + 1) as f64, Some(pages.len() as f64), format!("página {}", i + 1));
+        ctx.progress.partial(&items);   // um pedaço do resultado que já é útil
+    }
+    Ok(Imported { pages: pages.len() })
+}
+```
+
+| onde | o que chega |
+|------|-------------|
+| SSE | eventos `tool.progress` com `progress`, `total`, `message`, `partial` |
+| console | linhas `{"id":…,"event":"progress",…}` antes da resposta; a interface de terminal as mostra na linha de status |
+| MCP | `notifications/progress` para chamadas com `progressToken` (sem resultados parciais), e a mensagem de status de uma [task](/pt-br/transports/mcp/#tasks) |
+| `execute` | nada: a chamada simples só espera o resultado |
 
 ## Via HTTP (SSE)
 

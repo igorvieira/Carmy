@@ -298,9 +298,12 @@ carmy::app()   // [database] url in carmy.toml, or DATABASE_URL, makes all of it
 - **Every execution is audited:** who ran what, when, and how it ended, never the
   arguments or outputs. `carmy console` shows the trail with `audit` and the dead letters
   with `dead`.
-- **Postgres is a setting:** with the `postgres` feature, a database URL moves jobs,
-  idempotency and audit to Postgres, adds `State<PgPool>` for your tools, and the
-  `migrate` and `cleanup` commands.
+- **A database is a setting:** `postgres://` (feature `postgres`) or `redis://` (feature
+  `redis`) in `[database] url` moves the durable state there, injects the connection
+  into your tools, and adds the `migrate` and `cleanup` commands.
+- **An existing API becomes tools:** `carmy::openapi` (feature `openapi`) turns an
+  OpenAPI description into tools with effects, confirmation and `Idempotency-Key` on
+  writes.
 - **`/health` and `/ready`** answer for orchestrators, and the app's own routes and
   commands live next to the agent routes.
 
@@ -337,10 +340,19 @@ keep their idempotency reservation, so the uncertainty stays visible.
 ## MCP
 
 `carmy-mcp` adapts the runtime to the Model Context Protocol using the official `rmcp`
-SDK. It supports `initialize`, `ping`, `tools/list`, `tools/call` and request
-cancellation. Effects map to MCP tool annotations, and the exact Carmy metadata is kept in
-the tool's `_meta`. See [the MCP page](https://carmy-pi.vercel.app/transports/mcp/) for the full mapping and what v0.1 does
-not support.
+SDK, over stdio (`cargo run -- mcp`) and over Streamable HTTP at `/mcp`, next to the
+agent routes. Effects map to MCP tool annotations, and the exact Carmy metadata is kept
+in the tool's `_meta`. Beyond `tools/list` and `tools/call`:
+
+- **progress:** what a tool reports through `ctx.progress` arrives as
+  `notifications/progress`;
+- **tasks:** with clients that support them, a call outliving two seconds becomes a
+  task the client polls and may cancel;
+- **confirmation:** a tool that needs it asks the person behind the client through an
+  elicitation form;
+- **next actions** in `_meta["carmy/next_actions"]`.
+
+See [the MCP page](https://carmy-pi.vercel.app/transports/mcp/) for the full mapping.
 
 ## Architecture
 
@@ -373,6 +385,8 @@ not support.
 | `carmy-http`          | discovery, tool catalog, execution and SSE over Axum; webhooks, `/health`, `/ready` |
 | `carmy-jobs`          | tools that run later: queue, retries, dead letters, schedules, worker |
 | `carmy-postgres`      | durable stores: jobs (with an outbox), idempotency and audit          |
+| `carmy-redis`         | durable stores on Redis: jobs and idempotency                         |
+| `carmy-openapi`       | an OpenAPI description as tools                                       |
 | `carmy-mcp`           | MCP server adapter over `rmcp`                                        |
 | `carmy-observability` | tracing subscriber setup and OpenTelemetry composition                |
 
@@ -441,11 +455,11 @@ performance claims that these benchmarks cannot reproduce.
 
 ## Roadmap
 
-- **Execution plans:** DAGs of tool calls with `$step.field` references, built on today's `ExecutionRequest` and runtime.
-- **Tool progress events:** progress and partial results emitted from tools into the event stream.
-- **Transports:** MCP Streamable HTTP, MCP tasks on top of jobs, and a `next_actions` vocabulary.
-- **Stores:** a Redis job and idempotency store next to the Postgres one.
-- **Console:** the audit trail and the dead-letter queue in the terminal UI.
+- **GraphQL as a source of tools**, the way OpenAPI operations already are.
+- **OpenAPI in YAML**, next to JSON.
+- **Next actions from tools**, next to the ones Carmy already knows.
+- **Durable MCP tasks**, backed by jobs.
+- **Audit on Redis**, next to Postgres.
 
 Carmy will not add its own async runtime, HTTP parser, TLS stack, ORM, workflow engine,
 agent memory, LLM abstraction or prompt framework. Jobs run one tool call later, with

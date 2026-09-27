@@ -97,7 +97,9 @@ minute, and no more.
 ## For agents
 
 Every app has a `carmy_job` tool: given the `job_id` an enqueue returned, it answers the
-job's status, attempts, next run and last error. It never returns the job's arguments.
+job's status, attempts, next run, last error and, once it succeeded, the tool's
+`result`. It never returns the job's arguments. While the job runs,
+[`next_actions`](/transports/http/#next-actions) says when to ask again.
 Because it is a tool, it works over HTTP, MCP and the console alike, and goes through
 the same policies as any other.
 

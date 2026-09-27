@@ -98,8 +98,9 @@ enfileiram uma vez só. Um worker que ficou fora enfileira as ocorrências perdi
 ## Para agentes
 
 Todo app tem uma tool `carmy_job`: com o `job_id` que um enqueue devolveu, ela responde o
-status do job, as tentativas, a próxima execução e o último erro. Ela nunca devolve os
-argumentos do job. Por ser uma tool, funciona igual por HTTP, MCP e console, e passa
+status do job, as tentativas, a próxima execução, o último erro e, depois do sucesso, o
+`result` da tool. Ela nunca devolve os argumentos do job. Enquanto o job roda, o
+[`next_actions`](/pt-br/transports/http/#próximas-ações) diz quando perguntar de novo. Por ser uma tool, funciona igual por HTTP, MCP e console, e passa
 pelas mesmas policies de qualquer outra.
 
 ```json

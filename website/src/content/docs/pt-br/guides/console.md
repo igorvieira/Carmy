@@ -40,6 +40,8 @@ Ele compila a aplicação e depois mostra o seguinte:
 | `c` | concede ou revoga `confirm:<tool>` nesta sessão |
 | `r` | roda a última chamada de novo |
 | `h` | histórico; `Enter` roda de novo uma chamada anterior |
+| `a` | auditoria: as últimas execuções no servidor |
+| `d` | dead letters: jobs esperando uma decisão; `Enter` mostra por que um desistiu |
 | `?` | ajuda |
 | `q`, `Esc`, `Ctrl+C` | sai |
 
@@ -90,6 +92,9 @@ terminal. Cada mensagem é um objeto JSON por linha. A primeira linha é:
 | `{"id":7,"op":"dead","limit":20}` | os [jobs](/pt-br/guides/jobs/) na fila de dead letters |
 | `{"id":8,"op":"webhooks"}` | os [webhooks](/pt-br/guides/webhooks/): caminho, tool, modo e pointer de identidade |
 | `{"op":"help"}` / `{"op":"exit"}` | lista as operações / encerra a sessão |
+
+Enquanto uma `call` roda, uma tool que reporta [progresso](/pt-br/guides/streaming/#progresso)
+gera linhas `{"id":…,"event":"progress",…}` antes da resposta, com o mesmo `id`.
 
 Toda resposta repete o `id` e traz `ok`:
 

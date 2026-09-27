@@ -33,6 +33,8 @@ sidebar:
 | `carmy-http` | descoberta, catálogo, execução e SSE sobre o Axum; webhooks, `/health` e `/ready` |
 | `carmy-jobs` | tools que rodam depois: fila, retries, dead letters, agendamentos, worker |
 | `carmy-postgres` | stores duráveis: jobs (com outbox), idempotência e auditoria |
+| `carmy-redis` | stores duráveis em Redis: jobs e idempotência |
+| `carmy-openapi` | uma descrição OpenAPI como tools |
 | `carmy-mcp` | o adaptador de servidor MCP sobre o `rmcp` |
 | `carmy-observability` | configuração do subscriber de tracing |
 | `carmy-cli` | `carmy new`, `carmy g tool`, `carmy console`, `carmy server` |

@@ -6,6 +6,49 @@ All notable changes to Carmy are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Progress and partial results.** `ctx.progress.report(done, total, message)` and
+  `ctx.progress.partial(value)` let a tool report while it runs; nobody listening makes
+  them no-ops, and the hot path is unchanged. They become `ExecutionEvent::ToolProgress`:
+  `tool.progress` over SSE, progress lines in the console protocol and the terminal UI's
+  status line, and `notifications/progress` over MCP.
+- **Next actions.** `NextAction` and `next_actions()` in `carmy-core` fill
+  `_agent.next_actions` over HTTP and SSE, the console's answers and
+  `_meta["carmy/next_actions"]` over MCP: retry a retryable error with the same
+  `request_id` after `retry_after`, confirm a `CONFIRMATION_REQUIRED` call, poll
+  `carmy_job` while a job runs. A queued webhook points at `carmy_job`.
+- **Jobs keep their result**, and `carmy_job` returns it (Postgres migration 0004).
+- **MCP over Streamable HTTP** at `/mcp`, next to the agent routes, taking the host's
+  `AgentContext`; discovery advertises `mcp_url`. `[mcp]` configures `http`, `path`,
+  `allowed_hosts` (DNS-rebinding guard; `CARMY_MCP_ALLOWED_HOSTS`),
+  `promote_after_ms` and `confirm_by_elicitation`.
+- **MCP tasks.** With clients that support them, a call outliving `promote_after` (two
+  seconds) becomes a task (`tasks/get`, `tasks/cancel`), with progress as its status.
+- **Confirmation through MCP elicitation.** A tool that needs confirmation asks the
+  person behind the client; a yes reruns the call with `confirm:<tool>`.
+- **`carmy console`**: `a` shows the audit trail, `d` the dead letters and why each gave
+  up.
+- **`carmy-redis`** (feature `redis`): `RedisJobStore` and `RedisIdempotencyStore`,
+  atomic through Lua, leases on the Redis clock, expiring idempotency records.
+  `[database] url = "redis://…"` wires them; the URL's scheme picks the store.
+- **`carmy-openapi`** (feature `openapi`): an OpenAPI 3.0 or 3.1 JSON description as
+  tools, with effects from the method, confirmation for `DELETE`, `$ref`s followed,
+  `Idempotency-Key` on writes and `UPSTREAM_*` errors. `Carmy::tools` registers many
+  tools at once.
+- `carmy::Retention`, independent of the database.
+
+### Changed (breaking)
+
+- `AgentContext` has a new `progress` field; struct literals need `..Default::default()`.
+- `ExecutionEvent` is `#[non_exhaustive]` and has a `ToolProgress` variant.
+- `JobOutcome::Succeeded` carries the tool's output: `Succeeded(Value)`. Custom job
+  stores should keep it in `Job::result`.
+- `AgentHints::next_actions` is a list of `NextAction` objects, not strings.
+- `Carmy::retention` takes `impl Into<carmy::Retention>`; `carmy_postgres::Retention`
+  still works.
+- The roadmap no longer plans execution plans (DAGs).
+
 ## [0.5.0] - 2026-09-27
 
 ### Added

@@ -31,8 +31,9 @@ A tabela `[jobs]` configura o worker (veja [Jobs](/pt-br/guides/jobs/)):
 | `jobs.concurrency` | `CARMY_JOBS_CONCURRENCY` | `4` |
 | `jobs.max_attempts` | `CARMY_JOBS_MAX_ATTEMPTS` | `5` |
 
-A tabela `[database]` leva jobs, idempotência e auditoria para o Postgres (feature
-`postgres`; veja [Postgres](/pt-br/guides/postgres/)):
+A tabela `[database]` leva o estado durável do app para um banco; o esquema da URL
+escolhe qual: `postgres://` (feature `postgres`; veja [Postgres](/pt-br/guides/postgres/))
+ou `redis://` (feature `redis`; veja [Redis](/pt-br/guides/redis/)):
 
 | chave | variável de ambiente | padrão |
 |-------|----------------------|--------|
@@ -41,8 +42,18 @@ A tabela `[database]` leva jobs, idempotência e auditoria para o Postgres (feat
 | `database.idempotency_retention_days` | | `7` |
 | `database.audit_retention_days` | | `90` |
 
-Um `database.url` sem a feature `postgres` é um erro de configuração, não uma volta
+Um `database.url` sem a feature correspondente é um erro de configuração, não uma volta
 silenciosa para a memória.
+
+A tabela `[mcp]` configura o [MCP](/pt-br/transports/mcp/):
+
+| chave | variável de ambiente | padrão |
+|-------|----------------------|--------|
+| `mcp.http` | | `true`: serve MCP por HTTP ao lado das rotas de agente |
+| `mcp.path` | | `/mcp` |
+| `mcp.allowed_hosts` | `CARMY_MCP_ALLOWED_HOSTS` (separados por vírgula) | só localhost |
+| `mcp.promote_after_ms` | | `2000`; `0` nunca transforma chamadas em tasks |
+| `mcp.confirm_by_elicitation` | | `true` |
 
 `CARMY_CONFIG=caminho/para/arquivo.toml` lê outro arquivo. Chaves desconhecidas são
 erros, então erros de digitação não passam despercebidos:
@@ -95,6 +106,8 @@ O `Carmy::new()` ignora por completo o arquivo, o ambiente e o registro automát
 | `mcp` | sim | `carmy::mcp`, `.serve_mcp_stdio()` |
 | `observability` | sim | o subscriber de tracing instalado pelo `run()` |
 | `postgres` | não | `carmy::postgres`: stores duráveis de jobs, idempotência e auditoria |
+| `redis` | não | `carmy::redis`: stores duráveis de jobs e idempotência |
+| `openapi` | não | `carmy::openapi`: uma [descrição OpenAPI como tools](/pt-br/guides/openapi/) |
 
 ```toml
 carmy = { version = "0.5", default-features = false, features = ["http"] }

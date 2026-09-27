@@ -31,8 +31,9 @@ The `[jobs]` table configures the worker (see [Jobs](/guides/jobs/)):
 | `jobs.concurrency` | `CARMY_JOBS_CONCURRENCY` | `4` |
 | `jobs.max_attempts` | `CARMY_JOBS_MAX_ATTEMPTS` | `5` |
 
-The `[database]` table moves jobs, idempotency and audit to Postgres (feature
-`postgres`; see [Postgres](/guides/postgres/)):
+The `[database]` table moves the app's durable state to a database; the URL's scheme
+picks it: `postgres://` (feature `postgres`; see [Postgres](/guides/postgres/)) or
+`redis://` (feature `redis`; see [Redis](/guides/redis/)):
 
 | key | env var | default |
 |-----|---------|---------|
@@ -41,8 +42,18 @@ The `[database]` table moves jobs, idempotency and audit to Postgres (feature
 | `database.idempotency_retention_days` | | `7` |
 | `database.audit_retention_days` | | `90` |
 
-A `database.url` without the `postgres` feature is a configuration error, not a silent
+A `database.url` without the matching feature is a configuration error, not a silent
 fallback to memory.
+
+The `[mcp]` table configures [MCP](/transports/mcp/):
+
+| key | env var | default |
+|-----|---------|---------|
+| `mcp.http` | | `true`: serve MCP over HTTP next to the agent routes |
+| `mcp.path` | | `/mcp` |
+| `mcp.allowed_hosts` | `CARMY_MCP_ALLOWED_HOSTS` (comma-separated) | localhost only |
+| `mcp.promote_after_ms` | | `2000`; `0` never turns calls into tasks |
+| `mcp.confirm_by_elicitation` | | `true` |
 
 `CARMY_CONFIG=path/to/file.toml` reads another file. Unknown keys are errors, so typos
 don't go unnoticed:
@@ -95,6 +106,8 @@ carmy::app()
 | `mcp` | yes | `carmy::mcp`, `.serve_mcp_stdio()` |
 | `observability` | yes | the tracing subscriber installed by `run()` |
 | `postgres` | no | `carmy::postgres`: durable job, idempotency and audit stores |
+| `redis` | no | `carmy::redis`: durable job and idempotency stores |
+| `openapi` | no | `carmy::openapi`: an [OpenAPI description as tools](/guides/openapi/) |
 
 ```toml
 carmy = { version = "0.5", default-features = false, features = ["http"] }

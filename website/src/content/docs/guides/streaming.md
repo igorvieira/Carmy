@@ -12,10 +12,36 @@ format:
 |-------|------|
 | `execution.started` | always first |
 | `tool.started` | the tool is about to run (after policies, validation and idempotency) |
+| `tool.progress` | the tool reported progress or a partial result; as often as it does |
 | `tool.completed` | the tool finished, with `duration_ms` and `ok` |
 | `execution.completed` | always last, with the full result and `replayed` |
 
 Replays and early rejections skip the `tool.*` events.
+
+## Progress
+
+Tools report through `ctx.progress`. Nobody listening makes it a no-op, so report
+freely:
+
+```rust
+#[carmy::tool(description = "Import a catalog", effect = "write")]
+async fn import_catalog(ctx: AgentContext, input: Import) -> AgentResult<Imported> {
+    let pages = fetch_index(&input.url).await?;
+    for (i, page) in pages.iter().enumerate() {
+        let items = import_page(page).await?;
+        ctx.progress.report((i + 1) as f64, Some(pages.len() as f64), format!("page {}", i + 1));
+        ctx.progress.partial(&items);   // a piece of the result that is already useful
+    }
+    Ok(Imported { pages: pages.len() })
+}
+```
+
+| where | what arrives |
+|-------|--------------|
+| SSE | `tool.progress` events with `progress`, `total`, `message`, `partial` |
+| console | `{"id":…,"event":"progress",…}` lines before the answer; the terminal UI shows them in the status line |
+| MCP | `notifications/progress` for calls with a `progressToken` (no partial results), and the status message of a [task](/transports/mcp/#tasks) |
+| `execute` | nothing: the plain call just waits for the result |
 
 ## Over HTTP (SSE)
 

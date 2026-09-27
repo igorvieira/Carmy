@@ -40,6 +40,8 @@ It builds your application, then shows the following:
 | `c` | grant or revoke `confirm:<tool>` for this session |
 | `r` | run the last call again |
 | `h` | history; `Enter` runs a past call again |
+| `a` | audit: the latest executions on the server |
+| `d` | dead letters: jobs waiting for a decision; `Enter` shows why one gave up |
 | `?` | help |
 | `q`, `Esc`, `Ctrl+C` | quit |
 
@@ -90,6 +92,9 @@ Each message is one JSON object per line. The first line is:
 | `{"id":7,"op":"dead","limit":20}` | the [jobs](/guides/jobs/) in the dead-letter queue |
 | `{"id":8,"op":"webhooks"}` | the [webhooks](/guides/webhooks/): path, tool, mode and identity pointer |
 | `{"op":"help"}` / `{"op":"exit"}` | lists the operations / ends the session |
+
+While a `call` runs, a tool that reports [progress](/guides/streaming/#progress) produces
+`{"id":…,"event":"progress",…}` lines before the answer, with the same `id`.
 
 Every response echoes `id` and carries `ok`:
 

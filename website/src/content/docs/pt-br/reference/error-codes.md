@@ -58,3 +58,19 @@ Estes são retornados por `build()`, `run()` e `listen()` como `carmy::Error::Re
 | `WORKER_DOWN` | `capacity` | o `.require_worker(within)` não viu um worker marcar a fila a tempo |
 | `JOB_NOT_FOUND` | `not_found` | o `carmy_job` recebeu um `job_id` que não existe, ou que foi apagado |
 | `UNAVAILABLE` | `not_found` | o `audit` ou `dead` do console sem trilha ou fila anexadas |
+
+## Tools de OpenAPI
+
+O que uma API respondeu, numa categoria sobre a qual um agente consegue agir; `details`
+traz o `status` e o `body`.
+
+| código | categoria | quando |
+|--------|-----------|--------|
+| `UPSTREAM_RATE_LIMITED` | `capacity` | 429; retryable, com o `Retry-After` da API |
+| `UPSTREAM_UNAVAILABLE` | `capacity` | 5xx; retryable (503 com `Retry-After`) |
+| `UPSTREAM_UNAUTHORIZED` | `permission` | 401 ou 403 |
+| `UPSTREAM_NOT_FOUND` | `not_found` | 404 |
+| `UPSTREAM_CONFLICT` | `conflict` | 409 |
+| `UPSTREAM_REJECTED` | `validation` | qualquer outro 4xx |
+| `UPSTREAM_UNREACHABLE` | `capacity` | sem conexão; retryable, a requisição nunca saiu |
+| `UPSTREAM_FAILED` | `internal` | enviada, mas sem resposta; a API pode ter agido |

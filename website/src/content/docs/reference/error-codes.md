@@ -58,3 +58,19 @@ These are returned by `build()`, `run()` and `listen()` as `carmy::Error::Regist
 | `WORKER_DOWN` | `capacity` | `.require_worker(within)` saw no worker tick in time |
 | `JOB_NOT_FOUND` | `not_found` | `carmy_job` got a `job_id` that does not exist, or was purged |
 | `UNAVAILABLE` | `not_found` | the console's `audit` or `dead` with no trail or queue attached |
+
+## OpenAPI tools
+
+What an API answered, as a category an agent can act on; `details` has the `status` and
+the `body`.
+
+| code | category | when |
+|------|----------|------|
+| `UPSTREAM_RATE_LIMITED` | `capacity` | 429; retryable, with the API's `Retry-After` |
+| `UPSTREAM_UNAVAILABLE` | `capacity` | 5xx; retryable (503 with `Retry-After`) |
+| `UPSTREAM_UNAUTHORIZED` | `permission` | 401 or 403 |
+| `UPSTREAM_NOT_FOUND` | `not_found` | 404 |
+| `UPSTREAM_CONFLICT` | `conflict` | 409 |
+| `UPSTREAM_REJECTED` | `validation` | any other 4xx |
+| `UPSTREAM_UNREACHABLE` | `capacity` | no connection; retryable, the request never left |
+| `UPSTREAM_FAILED` | `internal` | sent but no answer; the API may have acted on it |

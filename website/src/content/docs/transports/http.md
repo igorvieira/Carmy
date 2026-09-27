@@ -24,7 +24,8 @@ are limited to 1 MiB.
 `tools_version` changes only when the catalog changes, so agents can cache the catalog
 instead of downloading it again. An app with [webhooks](/guides/webhooks/) adds
 `"webhooks"` to `capabilities` and lists each one (path, tool, mode, identity pointer),
-never with its secret.
+never with its secret. With [MCP over HTTP](/transports/mcp/#over-http), `mcp_url` points
+at it and `capabilities` includes `"mcp"`.
 
 ## `GET /agent/tools`
 
@@ -72,7 +73,27 @@ Modified` when the document hasn't changed.
 - Failures carry [`error`](/guides/errors/) instead of `data`.
 - `_agent.cacheable` is `true` when a result can be reused: a successful call to an
   idempotent tool with a `read` or `none` effect.
+- `_agent.next_actions` lists what to do next, when Carmy knows it; see below.
 - Responses are sent with `Cache-Control: no-store`.
+
+### Next actions
+
+```json
+"_agent": { "cacheable": false, "next_actions": [
+  { "tool": "publish", "reason": "Retry the same call with the same request_id", "after_ms": 5000 }
+] }
+```
+
+| after | Carmy suggests |
+|-------|----------------|
+| a retryable error | the same call, same `request_id`, after `retry_after` |
+| `CONFIRMATION_REQUIRED` | the same call, once a person confirmed |
+| `carmy_job` for a job still queued or running | `carmy_job` again, in a second |
+| a webhook delivery that was queued (`202`) | `carmy_job` with the new `job_id` |
+
+`arguments` absent means the same arguments. An empty list means there is nothing to
+suggest. The same list travels in the console's answers and in MCP results'
+`_meta["carmy/next_actions"]`.
 
 ### Status codes
 
@@ -89,8 +110,13 @@ return `413 PAYLOAD_TOO_LARGE`.
 
 ## Streaming
 
-Add `Accept: text/event-stream` to get [Server-Sent Events](/guides/streaming/). If the
-client disconnects, the execution is cancelled.
+Add `Accept: text/event-stream` to get [Server-Sent Events](/guides/streaming/), including
+the tool's `tool.progress`. If the client disconnects, the execution is cancelled.
+
+## MCP
+
+With the `mcp` feature, the same router serves [MCP over HTTP](/transports/mcp/#over-http)
+at `/mcp`; discovery lists it as `mcp_url`.
 
 ## Embedding the router
 
