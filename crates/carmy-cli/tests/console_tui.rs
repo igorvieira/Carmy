@@ -227,3 +227,55 @@ fn progress_shows_in_the_status_and_the_call_still_completes() {
     }}));
     assert!(app.result.is_some(), "the answer still matched its call");
 }
+
+#[test]
+fn a_shows_the_audit_trail() {
+    let mut app = ready();
+    let requests = app.handle_key(key(KeyCode::Char('a')));
+    assert_eq!(requests[0]["op"], "audit");
+    app.apply(json!({"id": requests[0]["id"], "ok": true, "result": {"executions": [
+        {"execution_id": "exec_2", "tool": "cancel_order", "principal": "ada", "status": "failed",
+         "error_code": "CONFIRMATION_REQUIRED", "duration_ms": 0, "replayed": false},
+        {"execution_id": "exec_1", "tool": "create_order", "principal": "ada", "status": "completed",
+         "error_code": null, "duration_ms": 12, "replayed": true}
+    ]}}));
+    assert_eq!(app.modal, Some(Modal::Audit { selected: 0 }));
+    let screen = screen(&app);
+    assert!(screen.contains("CONFIRMATION_REQUIRED"), "{screen}");
+    assert!(screen.contains("replayed"));
+    app.handle_key(key(KeyCode::Down));
+    assert_eq!(app.modal, Some(Modal::Audit { selected: 1 }));
+    app.handle_key(key(KeyCode::Esc));
+    assert_eq!(app.modal, None);
+}
+
+#[test]
+fn d_shows_dead_letters_and_why_they_gave_up() {
+    let mut app = ready();
+    let requests = app.handle_key(key(KeyCode::Char('d')));
+    assert_eq!(requests[0]["op"], "dead");
+    app.apply(json!({"id": requests[0]["id"], "ok": true, "result": {"jobs": [
+        {"id": "job_9", "request": {"tool": "create_order", "request_id": "order-9"},
+         "attempts": 5, "max_attempts": 5,
+         "last_error": {"code": "PAYMENT_DOWN", "message": "the gateway kept timing out"}}
+    ]}}));
+    assert!(screen(&app).contains("PAYMENT_DOWN"));
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(
+        app.modal,
+        Some(Modal::Dead {
+            selected: 0,
+            detail: true
+        })
+    );
+    let detail = screen(&app);
+    assert!(detail.contains("the gateway kept timing out"), "{detail}");
+    assert!(detail.contains("order-9"));
+
+    // An empty queue says so instead of opening an empty window.
+    let mut app = ready();
+    let requests = app.handle_key(key(KeyCode::Char('d')));
+    app.apply(json!({"id": requests[0]["id"], "ok": true, "result": {"jobs": []}}));
+    assert_eq!(app.modal, None);
+    assert_eq!(app.status, "No dead letters");
+}

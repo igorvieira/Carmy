@@ -60,7 +60,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
     let hints = match app.phase {
         Phase::Ready => {
-            " ↑↓ tool · Tab focus · Enter run · c confirm · r rerun · h history · ? help · q quit "
+            " ↑↓ tool · Tab focus · Enter run · c confirm · r rerun · h history · a audit · d dead · ? help · q quit "
         }
         _ => " q quit ",
     };
@@ -79,6 +79,8 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Some(Modal::Help) => draw_help(frame),
         Some(Modal::Confirm { tool, grant }) => draw_confirm(frame, tool, *grant),
         Some(Modal::History { selected }) => draw_history(frame, app, *selected),
+        Some(Modal::Audit { selected }) => draw_audit(frame, app, *selected),
+        Some(Modal::Dead { selected, detail }) => draw_dead(frame, app, *selected, *detail),
         None => {}
     }
 }
@@ -286,6 +288,11 @@ fn draw_help(frame: &mut Frame) {
         ("c", "grant or revoke confirm:<tool> for this session"),
         ("r", "run the last call again (shows idempotent replays)"),
         ("h", "history; Enter runs a past call again"),
+        ("a", "audit: the latest executions on the server"),
+        (
+            "d",
+            "dead letters: jobs waiting for a decision; Enter shows why",
+        ),
         ("Esc", "leave a field, close a window, or quit"),
         ("q / Ctrl+C", "quit"),
     ];
@@ -323,6 +330,127 @@ fn draw_confirm(frame: &mut Frame, tool: &str, grant: bool) {
     frame.render_widget(
         Paragraph::new(text).block(border("Confirmation", true)),
         area,
+    );
+}
+
+fn draw_audit(frame: &mut Frame, app: &App, selected: usize) {
+    let area = centered(frame, 100, 20);
+    let text = |v: &serde_json::Value| v.as_str().unwrap_or("-").to_owned();
+    let items: Vec<ListItem> = app
+        .audit
+        .iter()
+        .map(|record| {
+            let status = text(&record["status"]);
+            let mut spans = vec![
+                Span::styled(format!("{status:<10}"), status_style(&status)),
+                Span::raw(format!(" {:<24}", text(&record["tool"]))),
+                Span::styled(
+                    format!(" {:<14}", text(&record["principal"])),
+                    Style::new().fg(Color::DarkGray),
+                ),
+                Span::raw(format!(
+                    " {:>6} ms",
+                    record["duration_ms"].as_u64().unwrap_or(0)
+                )),
+            ];
+            if let Some(code) = record["error_code"].as_str() {
+                spans.push(Span::styled(
+                    format!("  {code}"),
+                    Style::new().fg(Color::Red),
+                ));
+            }
+            if record["replayed"] == true {
+                spans.push(Span::styled("  replayed", Style::new().fg(Color::Yellow)));
+            }
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+    let mut state = ListState::default().with_selected(Some(selected));
+    frame.render_widget(Clear, area);
+    frame.render_stateful_widget(
+        List::new(items)
+            .block(border(
+                "Audit · newest first · no arguments or outputs · Esc close",
+                true,
+            ))
+            .highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
+        area,
+        &mut state,
+    );
+}
+
+fn draw_dead(frame: &mut Frame, app: &App, selected: usize, detail: bool) {
+    let area = centered(frame, 100, 20);
+    frame.render_widget(Clear, area);
+    if detail && let Some(job) = app.dead.get(selected) {
+        let error = &job["last_error"];
+        let lines = vec![
+            Line::from(vec![
+                "tool        ".bold().cyan(),
+                Span::raw(job["request"]["tool"].as_str().unwrap_or("-").to_owned()),
+            ]),
+            Line::from(vec![
+                "job         ".bold().cyan(),
+                Span::raw(job["id"].as_str().unwrap_or("-").to_owned()),
+            ]),
+            Line::from(vec![
+                "request_id  ".bold().cyan(),
+                Span::raw(
+                    job["request"]["request_id"]
+                        .as_str()
+                        .unwrap_or("-")
+                        .to_owned(),
+                ),
+            ]),
+            Line::from(vec![
+                "attempts    ".bold().cyan(),
+                Span::raw(format!("{} of {}", job["attempts"], job["max_attempts"])),
+            ]),
+            Line::from(vec![
+                "error       ".bold().cyan(),
+                Span::styled(
+                    error["code"].as_str().unwrap_or("-").to_owned(),
+                    Style::new().fg(Color::Red),
+                ),
+            ]),
+            Line::raw(""),
+            Line::raw(error["message"].as_str().unwrap_or_default().to_owned()),
+        ];
+        frame.render_widget(
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: false })
+                .block(border("Dead letter · Enter back · Esc close", true)),
+            area,
+        );
+        return;
+    }
+    let items: Vec<ListItem> = app
+        .dead
+        .iter()
+        .map(|job| {
+            ListItem::new(Line::from(vec![
+                Span::raw(format!(
+                    "{:<24}",
+                    job["request"]["tool"].as_str().unwrap_or("-")
+                )),
+                Span::styled(
+                    format!(" {}/{} attempts", job["attempts"], job["max_attempts"]),
+                    Style::new().fg(Color::DarkGray),
+                ),
+                Span::styled(
+                    format!("  {}", job["last_error"]["code"].as_str().unwrap_or("-")),
+                    Style::new().fg(Color::Red),
+                ),
+            ]))
+        })
+        .collect();
+    let mut state = ListState::default().with_selected(Some(selected));
+    frame.render_stateful_widget(
+        List::new(items)
+            .block(border("Dead letters · Enter why · Esc close", true))
+            .highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
+        area,
+        &mut state,
     );
 }
 

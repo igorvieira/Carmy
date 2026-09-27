@@ -104,6 +104,15 @@ pub enum Modal {
     History {
         selected: usize,
     },
+    /// The latest executions, newest first.
+    Audit {
+        selected: usize,
+    },
+    /// Jobs in the dead-letter queue; `detail` shows the selected one's error.
+    Dead {
+        selected: usize,
+        detail: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -138,6 +147,8 @@ enum Pending {
     Confirm {
         tool: String,
     },
+    Audit,
+    Dead,
 }
 
 pub struct App {
@@ -153,6 +164,10 @@ pub struct App {
     pub modal: Option<Modal>,
     pub result: Option<Call>,
     pub history: Vec<Call>,
+    /// Execution records from the last `audit` request.
+    pub audit: Vec<Value>,
+    /// Jobs from the last `dead` request.
+    pub dead: Vec<Value>,
     pub scroll: u16,
     pub status: String,
     pub logs: Vec<String>,
@@ -181,6 +196,8 @@ impl App {
             modal: None,
             result: None,
             history: Vec::new(),
+            audit: Vec::new(),
+            dead: Vec::new(),
             scroll: 0,
             status: "Building the application…".into(),
             logs: Vec::new(),
@@ -343,6 +360,14 @@ impl App {
                     });
                 }
             }
+            KeyCode::Char('a') => {
+                self.status = "Loading the audit trail…".into();
+                return vec![self.request(Pending::Audit, json!({ "op": "audit", "limit": 100 }))];
+            }
+            KeyCode::Char('d') => {
+                self.status = "Loading the dead letters…".into();
+                return vec![self.request(Pending::Dead, json!({ "op": "dead", "limit": 100 }))];
+            }
             KeyCode::Char('r') => {
                 if let Some(last) = self.history.last().cloned() {
                     return self.run(&last.tool, &last.arguments, &last.request_id);
@@ -415,6 +440,38 @@ impl App {
                 }
                 vec![]
             }
+            Modal::Audit { selected } => {
+                let last = self.audit.len().saturating_sub(1);
+                self.modal = match key.code {
+                    KeyCode::Up | KeyCode::Char('k') => Some(Modal::Audit {
+                        selected: selected.saturating_sub(1),
+                    }),
+                    KeyCode::Down | KeyCode::Char('j') => Some(Modal::Audit {
+                        selected: (selected + 1).min(last),
+                    }),
+                    _ => None,
+                };
+                vec![]
+            }
+            Modal::Dead { selected, detail } => {
+                let last = self.dead.len().saturating_sub(1);
+                self.modal = match key.code {
+                    KeyCode::Up | KeyCode::Char('k') => Some(Modal::Dead {
+                        selected: selected.saturating_sub(1),
+                        detail,
+                    }),
+                    KeyCode::Down | KeyCode::Char('j') => Some(Modal::Dead {
+                        selected: (selected + 1).min(last),
+                        detail,
+                    }),
+                    KeyCode::Enter => Some(Modal::Dead {
+                        selected,
+                        detail: !detail,
+                    }),
+                    _ => None,
+                };
+                vec![]
+            }
         }
     }
 
@@ -461,6 +518,24 @@ impl App {
                     .map(|tools| tools.iter().map(ToolInfo::from_metadata).collect())
                     .unwrap_or_default();
                 self.selected = self.selected.min(self.tools.len().saturating_sub(1));
+            }
+            Pending::Audit => {
+                self.audit = result["executions"].as_array().cloned().unwrap_or_default();
+                self.status = format!("{} executions", self.audit.len());
+                self.modal = Some(Modal::Audit { selected: 0 });
+            }
+            Pending::Dead => {
+                self.dead = result["jobs"].as_array().cloned().unwrap_or_default();
+                self.status = match self.dead.len() {
+                    0 => "No dead letters".into(),
+                    n => format!("{n} jobs wait for a decision"),
+                };
+                if !self.dead.is_empty() {
+                    self.modal = Some(Modal::Dead {
+                        selected: 0,
+                        detail: false,
+                    });
+                }
             }
             Pending::Confirm { tool } => {
                 if result["confirmed"] == true {
