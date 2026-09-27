@@ -5,7 +5,7 @@ sidebar:
   order: 6
 ---
 
-O Carmy está na versão `0.5.0`, e a API é instável durante a série 0.x.
+O Carmy está na versão `0.6.0`, e a API é instável durante a série 0.x.
 
 ## Próximos passos
 

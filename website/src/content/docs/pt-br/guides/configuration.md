@@ -110,5 +110,5 @@ O `Carmy::new()` ignora por completo o arquivo, o ambiente e o registro automát
 | `openapi` | não | `carmy::openapi`: uma [descrição OpenAPI como tools](/pt-br/guides/openapi/) |
 
 ```toml
-carmy = { version = "0.5", default-features = false, features = ["http"] }
+carmy = { version = "0.6", default-features = false, features = ["http"] }
 ```

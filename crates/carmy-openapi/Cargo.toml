@@ -12,11 +12,11 @@ keywords = ["agents", "openapi", "tools", "mcp", "llm"]
 categories = ["web-programming::http-client", "api-bindings"]
 
 [dependencies]
-carmy-core = { path = "../carmy-core", version = "0.5.0" }
+carmy-core = { path = "../carmy-core", version = "0.6.0" }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "query"] }
 serde_json.workspace = true
 
 [dev-dependencies]
 axum = "0.8"
-carmy-runtime = { path = "../carmy-runtime", version = "0.5.0" }
+carmy-runtime = { path = "../carmy-runtime", version = "0.6.0" }
 tokio.workspace = true

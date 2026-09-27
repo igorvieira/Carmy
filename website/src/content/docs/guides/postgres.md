@@ -10,7 +10,7 @@ cannot see each other's state. `carmy::postgres` (feature `postgres`) keeps the 
 queue, the idempotency records and the audit trail in Postgres. Each piece is optional.
 
 ```toml
-carmy = { version = "0.5", features = ["postgres"] }
+carmy = { version = "0.6", features = ["postgres"] }
 ```
 
 Then give it a URL, like any other setting:

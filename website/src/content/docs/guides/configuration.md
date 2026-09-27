@@ -110,5 +110,5 @@ carmy::app()
 | `openapi` | no | `carmy::openapi`: an [OpenAPI description as tools](/guides/openapi/) |
 
 ```toml
-carmy = { version = "0.5", default-features = false, features = ["http"] }
+carmy = { version = "0.6", default-features = false, features = ["http"] }
 ```
