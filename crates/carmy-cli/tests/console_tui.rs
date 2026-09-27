@@ -254,11 +254,13 @@ fn d_shows_dead_letters_and_why_they_gave_up() {
     let mut app = ready();
     let requests = app.handle_key(key(KeyCode::Char('d')));
     assert_eq!(requests[0]["op"], "dead");
-    app.apply(json!({"id": requests[0]["id"], "ok": true, "result": {"jobs": [
-        {"id": "job_9", "request": {"tool": "create_order", "request_id": "order-9"},
-         "attempts": 5, "max_attempts": 5,
-         "last_error": {"code": "PAYMENT_DOWN", "message": "the gateway kept timing out"}}
-    ]}}));
+    app.apply(
+        json!({"id": requests[0]["id"], "ok": true, "result": {"jobs": [
+            {"id": "job_9", "request": {"tool": "create_order", "request_id": "order-9"},
+             "attempts": 5, "max_attempts": 5,
+             "last_error": {"code": "PAYMENT_DOWN", "message": "the gateway kept timing out"}}
+        ]}}),
+    );
     assert!(screen(&app).contains("PAYMENT_DOWN"));
     app.handle_key(key(KeyCode::Enter));
     assert_eq!(
