@@ -65,6 +65,11 @@ pub mod jobs {
 pub mod postgres {
     pub use carmy_postgres::*;
 }
+/// An OpenAPI description as tools.
+#[cfg(feature = "openapi")]
+pub mod openapi {
+    pub use carmy_openapi::*;
+}
 /// Durable Redis stores for jobs and idempotency.
 #[cfg(feature = "redis")]
 pub mod redis {

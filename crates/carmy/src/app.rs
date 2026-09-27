@@ -421,6 +421,13 @@ impl Carmy {
         }));
         self
     }
+    /// Register several tools at once, e.g. the tools of an OpenAPI description.
+    pub fn tools<T: IntoTool + 'static>(mut self, tools: impl IntoIterator<Item = T>) -> Self {
+        for tool in tools {
+            self = self.tool(tool);
+        }
+        self
+    }
     /// Register an application dependency for tools taking `State<T>`.
     pub fn state<T: Clone + Send + Sync + 'static>(mut self, value: T) -> Self {
         self.states.insert(value);

@@ -19,6 +19,7 @@ mcp = ["dep:carmy-mcp"]
 observability = ["dep:carmy-observability"]
 postgres = ["dep:carmy-postgres"]
 redis = ["dep:carmy-redis", "dep:chrono"]
+openapi = ["dep:carmy-openapi"]
 
 [dependencies]
 carmy-core = { path = "../carmy-core", version = "0.5.0" }
@@ -28,6 +29,7 @@ carmy-runtime = { path = "../carmy-runtime", version = "0.5.0" }
 carmy-jobs = { path = "../carmy-jobs", version = "0.5.0" }
 carmy-postgres = { path = "../carmy-postgres", version = "0.5.0", optional = true }
 carmy-redis = { path = "../carmy-redis", version = "0.5.0", optional = true }
+carmy-openapi = { path = "../carmy-openapi", version = "0.5.0", optional = true }
 chrono = { version = "0.4", optional = true }
 carmy-http = { path = "../carmy-http", version = "0.5.0", optional = true }
 carmy-mcp = { path = "../carmy-mcp", version = "0.5.0", optional = true }
