@@ -134,6 +134,84 @@ pub struct AgentContext {
     pub permissions: BTreeSet<String>,
     pub metadata: BTreeMap<String, Value>,
     pub cancellation: CancellationToken,
+    /// Report progress or partial results while the tool runs.
+    pub progress: Progress,
+}
+
+/// One progress report from a running tool.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ProgressUpdate {
+    /// How far along, in the tool's own unit (items, bytes, percent).
+    pub progress: f64,
+    /// The amount `progress` goes up to, when known.
+    pub total: Option<f64>,
+    /// A short human-readable status.
+    pub message: Option<String>,
+    /// A piece of the result that is already useful.
+    pub partial: Option<Value>,
+}
+
+/// Where a tool reports progress. Set by the runtime when someone listens (a stream,
+/// SSE, the console, an MCP progress token); otherwise every call is a no-op, so tools
+/// can report unconditionally.
+///
+/// ```
+/// # use carmy_core::AgentContext;
+/// # let ctx = AgentContext::default();
+/// ctx.progress.report(3.0, Some(10.0), "3 of 10 pages");
+/// ```
+#[derive(Clone, Default)]
+pub struct Progress {
+    sink: Option<std::sync::Arc<dyn Fn(ProgressUpdate) + Send + Sync>>,
+}
+
+impl Progress {
+    /// A progress handle that hands every update to `sink`.
+    pub fn new(sink: impl Fn(ProgressUpdate) + Send + Sync + 'static) -> Self {
+        Self {
+            sink: Some(std::sync::Arc::new(sink)),
+        }
+    }
+    /// Whether anyone receives the updates; skip expensive reports when not.
+    pub fn is_listening(&self) -> bool {
+        self.sink.is_some()
+    }
+    /// Report how far along the tool is. An empty `message` sends none.
+    pub fn report(&self, progress: f64, total: Option<f64>, message: impl Into<String>) {
+        self.send(|| {
+            let message: String = message.into();
+            ProgressUpdate {
+                progress,
+                total,
+                message: (!message.is_empty()).then_some(message),
+                partial: None,
+            }
+        });
+    }
+    /// Hand over a piece of the result before the tool finishes.
+    pub fn partial(&self, value: impl Serialize) {
+        self.send(|| ProgressUpdate {
+            partial: serde_json::to_value(value).ok(),
+            ..ProgressUpdate::default()
+        });
+    }
+    /// Send a full update.
+    pub fn update(&self, update: ProgressUpdate) {
+        self.send(|| update);
+    }
+    fn send(&self, update: impl FnOnce() -> ProgressUpdate) {
+        if let Some(sink) = &self.sink {
+            sink(update());
+        }
+    }
+}
+
+impl std::fmt::Debug for Progress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Progress")
+            .field("listening", &self.is_listening())
+            .finish()
+    }
 }
 /// Implement on application structs to inject dependencies explicitly.
 pub trait Tool: Send + Sync + 'static {
@@ -188,9 +266,12 @@ pub struct ExecutionResult {
 }
 /// Lifecycle events emitted by the runtime, independent of any wire encoding.
 /// `ToolStarted`/`ToolCompleted` are absent when a result is replayed or the
-/// request is rejected before invocation. `ExecutionCompleted` is always last.
+/// request is rejected before invocation; `ToolProgress` comes between them, as
+/// often as the tool reports. `ExecutionCompleted` is always last. New variants may
+/// be added, so matches need a wildcard arm.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ExecutionEvent {
     ExecutionStarted {
         execution_id: String,
@@ -199,6 +280,17 @@ pub enum ExecutionEvent {
     ToolStarted {
         execution_id: String,
         tool: String,
+    },
+    ToolProgress {
+        execution_id: String,
+        tool: String,
+        progress: f64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        total: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        partial: Option<Value>,
     },
     ToolCompleted {
         execution_id: String,
@@ -217,6 +309,7 @@ impl ExecutionEvent {
         match self {
             Self::ExecutionStarted { .. } => "execution.started",
             Self::ToolStarted { .. } => "tool.started",
+            Self::ToolProgress { .. } => "tool.progress",
             Self::ToolCompleted { .. } => "tool.completed",
             Self::ExecutionCompleted { .. } => "execution.completed",
         }

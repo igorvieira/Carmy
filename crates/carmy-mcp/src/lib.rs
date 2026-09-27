@@ -1,9 +1,11 @@
 //! Model Context Protocol adapter over Carmy's runtime, built on the official `rmcp` SDK.
 //!
-//! Supported in v0.1: `initialize`, `ping`, `tools/list` and `tools/call` over any
-//! `rmcp` transport (stdio helper included), plus request cancellation
-//! (`notifications/cancelled`). Resources, prompts, sampling, elicitation,
-//! progress notifications and tasks are not implemented.
+//! Supported: `initialize`, `ping`, `tools/list` and `tools/call` over any `rmcp`
+//! transport (stdio helper included), request cancellation (`notifications/cancelled`),
+//! and progress: when a `tools/call` carries a `progressToken`, what the tool reports
+//! through `ctx.progress` arrives as `notifications/progress` (partial results are not
+//! part of MCP progress, so they stay on Carmy's own streams). Resources, prompts and
+//! sampling are not implemented.
 //!
 //! Mapping:
 //! - Carmy effects become MCP tool annotations (`readOnlyHint`, `destructiveHint`,
@@ -22,8 +24,8 @@ use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
-        JsonObject, ListToolsResult, MetaObject, PaginatedRequestParams, ServerCapabilities,
-        ServerConfig, Tool as McpTool, ToolAnnotations,
+        JsonObject, ListToolsResult, MetaObject, PaginatedRequestParams, ProgressNotificationParam,
+        ServerCapabilities, ServerConfig, Tool as McpTool, ToolAnnotations,
     },
     service::RequestContext,
 };
@@ -204,7 +206,39 @@ impl ServerHandler for McpServer {
         // the runtime's own cancellation (deadline, drop) never marks the MCP request
         // itself cancelled, which would suppress the response.
         request.context.cancellation = ctx.ct.child_token();
-        let result = self.runtime.execute(request).await;
+        let result = match ctx.meta.get_progress_token() {
+            None => self.runtime.execute(request).await,
+            // A client asking for progress gets the tool's reports as notifications.
+            Some(token) => {
+                use futures_util::StreamExt;
+                let mut events = self.runtime.execute_stream(request);
+                let mut last = None;
+                while let Some(event) = events.next().await {
+                    if let ExecutionEvent::ToolProgress {
+                        progress,
+                        total,
+                        message,
+                        ..
+                    } = &event
+                    {
+                        let mut update = ProgressNotificationParam::new(token.clone(), *progress);
+                        if let Some(total) = total {
+                            update = update.with_total(*total);
+                        }
+                        if let Some(message) = message {
+                            update = update.with_message(message.clone());
+                        }
+                        // Best effort: a client that stopped listening still gets its answer.
+                        let _ = ctx.peer.notify_progress(update).await;
+                    }
+                    last = Some(event);
+                }
+                match last {
+                    Some(ExecutionEvent::ExecutionCompleted { result, .. }) => result,
+                    _ => unreachable!("an execution stream always ends with ExecutionCompleted"),
+                }
+            }
+        };
         // An unknown tool is a protocol error, not a tool result.
         if let Err(error) = &result.outcome
             && error.code == "TOOL_NOT_FOUND"

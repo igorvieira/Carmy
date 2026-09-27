@@ -426,6 +426,21 @@ impl App {
             self.status = format!("Connected to {} · press ? for help", self.server);
             return vec![self.request(Pending::Tools, json!({ "op": "tools" }))];
         }
+        // Progress from a running call: show it, and keep waiting for the answer.
+        if line["event"] == "progress" {
+            let tool = line["tool"].as_str().unwrap_or("tool");
+            let done = match (line["progress"].as_f64(), line["total"].as_f64()) {
+                (Some(p), Some(t)) if t > 0.0 => format!(" {:.0}%", p / t * 100.0),
+                (Some(p), _) => format!(" {p}"),
+                _ => String::new(),
+            };
+            let message = line["message"]
+                .as_str()
+                .map(|m| format!(" · {m}"))
+                .unwrap_or_default();
+            self.status = format!("Running {tool}…{done}{message}");
+            return vec![];
+        }
         let Some(pending) = line["id"].as_u64().and_then(|id| self.pending.remove(&id)) else {
             return vec![];
         };

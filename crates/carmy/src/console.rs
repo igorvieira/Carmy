@@ -19,6 +19,12 @@
 //! {"id":8,"op":"webhooks"}                                 -> the webhooks and the tools they lead to
 //! ```
 //!
+//! While a `call` runs, a tool that reports progress produces lines before the answer:
+//!
+//! ```text
+//! {"id":3,"event":"progress","execution_id":"exec_…","tool":"import","progress":2.0,"total":10.0,"message":"page 2"}
+//! ```
+//!
 //! A line that does not start with `{` is read as a text command (`tools`,
 //! `describe <tool>`, `confirm <tool>`, `revoke <tool>`, `audit [n]`, `dead [n]`, `webhooks`, `help`, `exit`, or
 //! `<tool> [json] [--request-id <id>]`); the answer is still JSON. Unstable during 0.x.
@@ -93,7 +99,7 @@ where
         if request.get("op").and_then(Value::as_str) == Some("exit") {
             break;
         }
-        let response = session.handle(request).await;
+        let response = session.handle(request, &mut output).await;
         write_line(&mut output, &response).await?;
     }
     output.flush().await
@@ -119,7 +125,8 @@ impl Session {
         }
     }
 
-    async fn handle(&mut self, request: Value) -> Value {
+    /// Progress lines go to `output` as they happen; the returned value is the answer.
+    async fn handle<W: AsyncWrite + Unpin>(&mut self, request: Value, output: &mut W) -> Value {
         let id = request.get("id").cloned();
         let tool = request
             .get("tool")
@@ -142,7 +149,7 @@ impl Session {
                 })
             }
             Some("call") => match tool {
-                Some(tool) => Ok(self.call(tool, &request).await),
+                Some(tool) => Ok(self.call(tool, &request, output).await),
                 None => Err(invalid("`call` needs a `tool`")),
             },
             Some("webhooks") => Ok(json!({ "webhooks": self.extras.webhooks })),
@@ -193,7 +200,12 @@ impl Session {
         })
     }
 
-    async fn call(&self, tool: String, request: &Value) -> Value {
+    async fn call<W: AsyncWrite + Unpin>(
+        &self,
+        tool: String,
+        request: &Value,
+        output: &mut W,
+    ) -> Value {
         let arguments = request
             .get("arguments")
             .cloned()
@@ -210,6 +222,18 @@ impl Session {
         let mut events = self.runtime.execute_stream(execution);
         let mut last = None;
         while let Some(event) = events.next().await {
+            if matches!(event, ExecutionEvent::ToolProgress { .. }) {
+                let mut line = serde_json::to_value(&event).expect("events serialize");
+                if let Some(object) = line.as_object_mut() {
+                    object.remove("type");
+                    object.insert("event".into(), "progress".into());
+                    if let Some(id) = request.get("id") {
+                        object.insert("id".into(), id.clone());
+                    }
+                }
+                // Best effort: a reader that went away still gets no answer at all.
+                let _ = write_line(output, &line).await;
+            }
             last = Some(event);
         }
         let duration_ms = started.elapsed().as_secs_f64() * 1000.0;

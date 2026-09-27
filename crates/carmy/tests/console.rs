@@ -192,3 +192,35 @@ async fn audit_and_dead_need_their_sources() {
     assert_eq!(out[2]["error"]["code"], "UNAVAILABLE");
     assert_eq!(out[3]["error"]["code"], "INVALID_REQUEST");
 }
+
+#[carmy::tool(description = "Import pages", effect = "write", register = false)]
+async fn import(ctx: AgentContext) -> AgentResult<usize> {
+    for page in 1..=2 {
+        ctx.progress
+            .report(page as f64, Some(2.0), format!("page {page}"));
+    }
+    Ok(2)
+}
+
+#[tokio::test]
+async fn progress_lines_come_before_the_answer() {
+    let runtime = Carmy::new().tool(import).build().unwrap();
+    let input = "{\"id\":7,\"op\":\"call\",\"tool\":\"import\"}\n";
+    let mut output = Vec::new();
+    carmy::console::serve(runtime, "test", input.as_bytes(), &mut output)
+        .await
+        .unwrap();
+    let lines: Vec<Value> = String::from_utf8(output)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 4, "ready, two progress lines, the answer");
+    assert_eq!(lines[1]["id"], 7);
+    assert_eq!(lines[1]["event"], "progress");
+    assert_eq!(lines[1]["message"], "page 1");
+    assert_eq!(lines[2]["progress"], 2.0);
+    assert_eq!(lines[3]["id"], 7);
+    assert_eq!(lines[3]["ok"], true);
+    assert_eq!(lines[3]["result"]["data"], 2);
+}

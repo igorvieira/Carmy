@@ -259,3 +259,65 @@ async fn client_disconnect_cancels_streamed_execution() {
         .await
         .expect("disconnect must cancel the execution token");
 }
+
+struct Progressing;
+impl Tool for Progressing {
+    type Input = String;
+    type Output = String;
+    fn metadata(&self) -> ToolMetadata {
+        ToolMetadata {
+            name: "progressing".into(),
+            description: "reports progress".into(),
+            input_schema: schemars::schema_for!(String).to_value(),
+            output_schema: schemars::schema_for!(String).to_value(),
+            effect: Effect::Read,
+            idempotent: true,
+            parallel_safe: true,
+            confirmation: Confirmation::None,
+        }
+    }
+    async fn execute(&self, ctx: AgentContext, _: String) -> AgentResult<String> {
+        ctx.progress.report(1.0, Some(2.0), "halfway");
+        ctx.progress.partial(json!(["first"]));
+        Ok("done".into())
+    }
+}
+
+#[tokio::test]
+async fn sse_carries_progress_and_partial_results() {
+    let app = carmy_http::router(Arc::new(Runtime::new().tool(Progressing).unwrap()), "test");
+    let response = app
+        .oneshot(stream(json!({"tool": "progressing", "arguments": "x"})))
+        .await
+        .unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body = std::str::from_utf8(&body).unwrap();
+    let names: Vec<_> = body
+        .lines()
+        .filter_map(|l| l.strip_prefix("event: "))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "execution.started",
+            "tool.started",
+            "tool.progress",
+            "tool.progress",
+            "tool.completed",
+            "execution.completed"
+        ]
+    );
+    let data: Vec<Value> = body
+        .lines()
+        .filter_map(|l| l.strip_prefix("data: "))
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(data[2]["progress"], 1.0);
+    assert_eq!(data[2]["total"], 2.0);
+    assert_eq!(data[2]["message"], "halfway");
+    assert!(
+        data[2].get("type").is_none(),
+        "the SSE event name carries the type"
+    );
+    assert_eq!(data[3]["partial"], json!(["first"]));
+}

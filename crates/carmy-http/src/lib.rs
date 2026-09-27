@@ -331,6 +331,14 @@ fn sse_event(event: ExecutionEvent, reusable: bool) -> Event {
             data["replayed"] = replayed.into();
             data
         }
+        // `tool.progress` and any later event: the event's own fields, minus its tag.
+        other => {
+            let mut data = serde_json::to_value(&other).expect("events serialize");
+            if let Some(object) = data.as_object_mut() {
+                object.remove("type");
+            }
+            data
+        }
     };
     Event::default().event(name).data(data.to_string())
 }

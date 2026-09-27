@@ -208,3 +208,22 @@ fn request_ids_belong_to_one_tool() {
     app.handle_key(key(KeyCode::Up));
     assert_eq!(app.request_id().text, "order-1");
 }
+
+#[test]
+fn progress_shows_in_the_status_and_the_call_still_completes() {
+    let mut app = ready();
+    app.handle_key(key(KeyCode::Enter));
+    let requests = app.handle_key(key(KeyCode::Enter));
+    let call = requests[0].clone();
+    app.apply(
+        json!({"id": call["id"], "event": "progress", "tool": "create_order",
+                     "progress": 1.0, "total": 4.0, "message": "reserving stock"}),
+    );
+    assert_eq!(app.status, "Running create_order… 25% · reserving stock");
+    assert!(app.result.is_none(), "still waiting for the answer");
+    app.apply(json!({"id": call["id"], "ok": true, "result": {
+        "execution_id": "exec_1", "status": "completed", "data": {"order_id": 7},
+        "replayed": false, "duration_ms": 3.0
+    }}));
+    assert!(app.result.is_some(), "the answer still matched its call");
+}

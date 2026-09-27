@@ -338,7 +338,7 @@ impl Runtime {
     }
     async fn run(
         &self,
-        request: ExecutionRequest,
+        mut request: ExecutionRequest,
         registered: Option<&Registered>,
         events: Option<&Sender>,
     ) -> AgentResult<(ExecutionResult, bool)> {
@@ -408,6 +408,24 @@ impl Runtime {
             execution_id: execution_id.clone(),
             tool: tool.clone(),
         });
+        // Only a listening stream pays for progress; otherwise the handle stays a no-op.
+        if let Some(sender) = events {
+            let (sender, execution_id, tool) = (sender.clone(), execution_id.clone(), tool.clone());
+            let host = std::mem::take(&mut request.context.progress);
+            request.context.progress = Progress::new(move |update: ProgressUpdate| {
+                if host.is_listening() {
+                    host.update(update.clone());
+                }
+                let _ = sender.send(ExecutionEvent::ToolProgress {
+                    execution_id: execution_id.clone(),
+                    tool: tool.clone(),
+                    progress: update.progress,
+                    total: update.total,
+                    message: update.message,
+                    partial: update.partial,
+                });
+            });
+        }
         let started = Instant::now();
         let work = async {
             let _guard = if !registered.metadata.parallel_safe {

@@ -350,3 +350,86 @@ async fn rate_limits_per_principal_with_retry_after() {
     tokio::time::sleep(Duration::from_millis(350)).await;
     assert!(rt.execute(as_user("ada")).await.outcome.is_ok());
 }
+
+struct Pages;
+impl Tool for Pages {
+    type Input = String;
+    type Output = usize;
+    fn metadata(&self) -> ToolMetadata {
+        ToolMetadata {
+            name: "pages".into(),
+            description: "reads pages".into(),
+            input_schema: schemars::schema_for!(String).to_value(),
+            output_schema: schemars::schema_for!(usize).to_value(),
+            effect: Effect::Read,
+            idempotent: true,
+            parallel_safe: true,
+            confirmation: Confirmation::None,
+        }
+    }
+    async fn execute(&self, ctx: AgentContext, _: String) -> AgentResult<usize> {
+        for page in 1..=2 {
+            tokio::task::yield_now().await;
+            ctx.progress
+                .report(page as f64, Some(2.0), format!("page {page}"));
+        }
+        ctx.progress.partial(json!({"first_page": ["a", "b"]}));
+        Ok(2)
+    }
+}
+
+#[tokio::test]
+async fn tools_report_progress_and_partial_results_to_listeners() {
+    use futures_util::StreamExt;
+    let rt = Arc::new(Runtime::new().tool(Pages).unwrap());
+    let mut req = request(json!("x"));
+    req.tool = "pages".into();
+    let events: Vec<_> = rt.execute_stream(req.clone()).collect().await;
+    assert_eq!(
+        names(&events),
+        [
+            "execution.started",
+            "tool.started",
+            "tool.progress",
+            "tool.progress",
+            "tool.progress",
+            "tool.completed",
+            "execution.completed"
+        ]
+    );
+    let ExecutionEvent::ToolProgress {
+        progress,
+        total,
+        message,
+        ..
+    } = &events[3]
+    else {
+        panic!("a progress event")
+    };
+    assert_eq!(
+        (*progress, *total, message.as_deref()),
+        (2.0, Some(2.0), Some("page 2"))
+    );
+    let ExecutionEvent::ToolProgress { partial, .. } = &events[4] else {
+        panic!("a partial result")
+    };
+    assert_eq!(partial, &Some(json!({"first_page": ["a", "b"]})));
+    let wire = serde_json::to_value(&events[2]).unwrap();
+    assert_eq!(wire["type"], "tool_progress");
+    assert!(
+        wire.get("partial").is_none(),
+        "absent fields stay off the wire"
+    );
+
+    // Without a listener, reporting is a no-op and the result is the same.
+    assert_eq!(rt.execute(req.clone()).await.outcome.unwrap(), json!(2));
+
+    // A host's own progress handle still receives updates next to the stream.
+    let seen = Arc::new(AtomicUsize::new(0));
+    let counter = seen.clone();
+    req.context.progress = Progress::new(move |_| {
+        counter.fetch_add(1, Ordering::SeqCst);
+    });
+    let _: Vec<_> = rt.execute_stream(req).collect().await;
+    assert_eq!(seen.load(Ordering::SeqCst), 3);
+}

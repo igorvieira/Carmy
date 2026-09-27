@@ -204,3 +204,72 @@ async fn execution_meta_is_opt_in_for_successes() {
         .unwrap();
     assert_eq!(failed.meta.unwrap().0["carmy/status"], "failed");
 }
+
+struct Import;
+impl Tool for Import {
+    type Input = Input;
+    type Output = Output;
+    fn metadata(&self) -> ToolMetadata {
+        ToolMetadata {
+            name: "import".into(),
+            ..Create(Arc::new(AtomicUsize::new(0))).metadata()
+        }
+    }
+    async fn execute(&self, ctx: AgentContext, _: Input) -> AgentResult<Output> {
+        for page in 1..=3 {
+            ctx.progress
+                .report(page as f64, Some(3.0), format!("page {page}"));
+        }
+        Ok(Output { id: 3 })
+    }
+}
+
+/// A client that records the progress notifications it receives.
+#[derive(Clone, Default)]
+struct Watcher(Arc<std::sync::Mutex<Vec<rmcp::model::ProgressNotificationParam>>>);
+impl rmcp::ClientHandler for Watcher {
+    async fn on_progress(
+        &self,
+        params: rmcp::model::ProgressNotificationParam,
+        _: rmcp::service::NotificationContext<RoleClient>,
+    ) {
+        self.0.lock().unwrap().push(params);
+    }
+}
+
+#[tokio::test]
+async fn progress_tokens_receive_the_tools_reports() {
+    let runtime = Arc::new(Runtime::new().tool(Import).unwrap());
+    let (server, client) = tokio::io::duplex(64 * 1024);
+    tokio::spawn(async move {
+        let running = McpServer::new(runtime).serve(server).await.unwrap();
+        running.waiting().await.unwrap();
+    });
+    let watcher = Watcher::default();
+    let client = watcher.clone().serve(client).await.unwrap();
+
+    // The rmcp client attaches a progress token to every call.
+    let result = client
+        .call_tool(call("import", json!({"name": "x"})))
+        .await
+        .unwrap();
+    assert_eq!(result.is_error, Some(false));
+
+    // Notifications are delivered asynchronously; give them a moment to land.
+    for _ in 0..50 {
+        if watcher.0.lock().unwrap().len() == 3 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let seen = watcher.0.lock().unwrap().clone();
+    assert_eq!(seen.len(), 3);
+    // The rmcp client assigns its own token; the server must echo whatever it received.
+    assert!(
+        seen.iter()
+            .all(|p| p.progress_token == seen[0].progress_token)
+    );
+    assert_eq!(seen[2].progress, 3.0);
+    assert_eq!(seen[2].total, Some(3.0));
+    assert_eq!(seen[2].message.as_deref(), Some("page 3"));
+}
