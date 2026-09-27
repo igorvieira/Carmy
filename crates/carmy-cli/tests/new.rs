@@ -114,7 +114,8 @@ fn generated_project_passes_its_tests() {
         .map(|l| serde_json::from_str(l).unwrap())
         .collect();
     assert_eq!(lines[0]["protocol"], "carmy-console/1");
-    assert_eq!(lines[1]["result"]["tools"].as_array().unwrap().len(), 4);
+    // The generated tools, plus carmy_job.
+    assert_eq!(lines[1]["result"]["tools"].as_array().unwrap().len(), 5);
     assert_eq!(lines[2]["result"]["data"]["message"], "Hello, Ada!");
     let status = Command::new(env!("CARGO"))
         .arg("test")

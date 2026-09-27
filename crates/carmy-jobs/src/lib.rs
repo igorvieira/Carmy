@@ -211,8 +211,13 @@ struct Schedule {
     last_enqueued: Mutex<Option<DateTime<Utc>>>,
 }
 
+enum Bound {
+    Owned(Arc<Runtime>),
+    Borrowed(std::sync::Weak<Runtime>),
+}
+
 struct Inner {
-    runtime: OnceLock<Arc<Runtime>>,
+    runtime: OnceLock<Bound>,
     store: Arc<dyn JobStore>,
     clock: Arc<dyn Clock>,
     retry: RetryPolicy,
@@ -232,7 +237,7 @@ pub struct Jobs {
 impl Jobs {
     pub fn new(runtime: Arc<Runtime>, store: Arc<dyn JobStore>) -> Self {
         let jobs = Self::unbound(store);
-        let _ = jobs.inner.runtime.set(runtime);
+        let _ = jobs.inner.runtime.set(Bound::Owned(runtime));
         jobs
     }
 
@@ -255,17 +260,32 @@ impl Jobs {
 
     /// Bind the runtime that runs the jobs. Only the first bind takes effect.
     pub fn bind(&self, runtime: Arc<Runtime>) {
-        let _ = self.inner.runtime.set(runtime);
+        let _ = self.inner.runtime.set(Bound::Owned(runtime));
     }
 
-    fn runtime(&self) -> AgentResult<&Arc<Runtime>> {
-        self.inner.runtime.get().ok_or_else(|| {
-            AgentError::new(
-                "JOBS_UNBOUND",
+    /// Bind without keeping the runtime alive: for a runtime whose tools hold this queue
+    /// (`State<Jobs>`), where an owned bind would be a reference cycle that is never
+    /// freed. Whoever runs the app keeps the runtime; once it is gone, running jobs
+    /// fails with `JOBS_UNBOUND`.
+    pub fn bind_weak(&self, runtime: &Arc<Runtime>) {
+        let _ = self
+            .inner
+            .runtime
+            .set(Bound::Borrowed(Arc::downgrade(runtime)));
+    }
+
+    fn runtime(&self) -> AgentResult<Arc<Runtime>> {
+        let unbound =
+            |why: &str| AgentError::new("JOBS_UNBOUND", why.to_owned(), ErrorCategory::Internal);
+        match self.inner.runtime.get() {
+            Some(Bound::Owned(runtime)) => Ok(runtime.clone()),
+            Some(Bound::Borrowed(runtime)) => runtime
+                .upgrade()
+                .ok_or_else(|| unbound("The runtime behind this job queue was dropped")),
+            None => Err(unbound(
                 "The job queue has no runtime; call Jobs::bind or Carmy::build first",
-                ErrorCategory::Internal,
-            )
-        })
+            )),
+        }
     }
 
     pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
@@ -561,7 +581,7 @@ impl Jobs {
         };
         let result = runtime.execute(request).await;
         heartbeat.abort();
-        let outcome = self.outcome(&job, runtime, result.status, result.outcome.err());
+        let outcome = self.outcome(&job, &runtime, result.status, result.outcome.err());
         tracing::info!(outcome = ?outcome_name(&outcome), "job finished");
         if let Err(e) = self.inner.store.finish(&job.id, outcome).await {
             tracing::error!(job = %job.id, error = %e, "job outcome could not be recorded");

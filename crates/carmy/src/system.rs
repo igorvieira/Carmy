@@ -6,10 +6,12 @@
 //! - `carmy_dead_letters` and `carmy_audit`: operator views, added by
 //!   [`Carmy::operator_tools`](crate::Carmy::operator_tools).
 //!
-//! None of them returns a job's arguments or an execution's payload.
+//! None of them returns a job's arguments or an execution's payload. They hold the job
+//! store, not the queue: the queue refers to the runtime, and the runtime holds these
+//! tools, so holding the queue would be a reference cycle.
 use crate::{
     AgentContext, AgentError, AgentResult, Confirmation, Effect, ErrorCategory, Tool, ToolMetadata,
-    jobs::{Job, JobId, Jobs},
+    jobs::{Job, JobId, JobStore},
     runtime::InMemoryAudit,
 };
 use schemars::JsonSchema;
@@ -75,7 +77,7 @@ pub struct JobInput {
     pub job_id: String,
 }
 
-pub(crate) struct JobStatus(pub Jobs);
+pub(crate) struct JobStatus(pub Arc<dyn JobStore>);
 impl Tool for JobStatus {
     type Input = JobInput;
     type Output = JobView;
@@ -115,7 +117,7 @@ pub struct DeadLetters {
     pub jobs: Vec<JobView>,
 }
 
-pub(crate) struct DeadLettersTool(pub Jobs);
+pub(crate) struct DeadLettersTool(pub Arc<dyn JobStore>);
 impl Tool for DeadLettersTool {
     type Input = LimitInput;
     type Output = DeadLetters;

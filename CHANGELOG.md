@@ -34,6 +34,14 @@ All notable changes to Carmy are documented here. The format follows
 - The curator reads its database from `DATABASE_URL` and no longer wires Postgres by
   hand.
 
+### Fixed
+
+- **A built app no longer leaks its runtime.** Tools holding the job queue
+  (`State<Jobs>`), and the queue holding the runtime, formed a reference cycle that was
+  never freed. The facade now binds the queue with `Jobs::bind_weak`: whoever runs the
+  app keeps the runtime, and a queue that outlives it fails with `JOBS_UNBOUND`. The
+  fuzzer's leak sanitizer found it.
+
 ## [0.4.1] - 2026-09-26
 
 ### Fixed

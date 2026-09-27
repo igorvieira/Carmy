@@ -366,24 +366,26 @@ impl Carmy {
     pub fn build(self) -> Result<Arc<carmy_runtime::Runtime>, Error> {
         self.build_with_jobs().map(|(runtime, _)| runtime)
     }
-    /// The runtime and the job queue bound to it. Tools may take `State<Jobs>`.
+    /// The runtime and the job queue bound to it. Tools may take `State<Jobs>`. The
+    /// queue does not keep the runtime alive: hold on to it while jobs run.
     pub fn build_with_jobs(
         mut self,
     ) -> Result<(Arc<carmy_runtime::Runtime>, carmy_jobs::Jobs), Error> {
         if let Some(error) = self.error {
             return Err(error);
         }
+        let store = self.job_store.clone();
         let jobs = carmy_jobs::Jobs::unbound(self.job_store).with_retry(self.retry);
         self.states.insert(jobs.clone());
         self.runtime = self.runtime.sink(self.audit.clone());
         // Registered first, so an app tool can never take their names silently.
         let system = self
             .runtime
-            .register(crate::system::JobStatus(jobs.clone()))
+            .register(crate::system::JobStatus(store.clone()))
             .and_then(|()| {
                 if self.operator_tools {
                     self.runtime
-                        .register(crate::system::DeadLettersTool(jobs.clone()))?;
+                        .register(crate::system::DeadLettersTool(store.clone()))?;
                     self.runtime
                         .register(crate::system::AuditTool(self.audit.clone()))?;
                 }
@@ -394,7 +396,9 @@ impl Carmy {
             register(&mut self.runtime, &self.states).map_err(Error::Registration)?;
         }
         let runtime = Arc::new(self.runtime);
-        jobs.bind(runtime.clone());
+        // Weak: tools taking `State<Jobs>` hold the queue, so an owned bind would be a
+        // cycle. Callers keep the runtime alive (router, console, MCP server, worker).
+        jobs.bind_weak(&runtime);
         for (name, expression, make) in self.schedules {
             jobs.every(name, &expression, make)
                 .map_err(Error::Registration)?;
@@ -549,7 +553,8 @@ impl Carmy {
             Some("mcp") => self.run_mcp().await,
             Some("worker") => {
                 let concurrency = self.worker_concurrency;
-                let (_, jobs) = self.build_with_jobs()?;
+                // Held for as long as the worker runs: the queue only borrows it.
+                let (_runtime, jobs) = self.build_with_jobs()?;
                 let shutdown = crate::CancellationToken::new();
                 tokio::spawn({
                     let shutdown = shutdown.clone();

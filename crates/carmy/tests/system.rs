@@ -158,3 +158,38 @@ fn system_tool_names_are_reserved() {
         .expect("a configuration error");
     assert!(error.to_string().contains("registration"), "{error}");
 }
+
+#[carmy::tool(description = "Queues work", effect = "write", register = false)]
+async fn queue_more(State(jobs): State<carmy::jobs::Jobs>) -> AgentResult<String> {
+    let id = jobs
+        .enqueue(carmy::runtime::execution_request(
+            "carmy_job",
+            json!({"job_id": "x"}),
+        ))
+        .await?;
+    Ok(id.0)
+}
+
+#[tokio::test]
+async fn a_dropped_app_frees_its_runtime() {
+    // Tools holding the queue, and the queue holding the runtime, used to form a cycle
+    // that was never freed.
+    let (runtime, jobs) = Carmy::new()
+        .tool(queue_more)
+        .operator_tools()
+        .build_with_jobs()
+        .unwrap();
+    let weak = std::sync::Arc::downgrade(&runtime);
+    jobs.enqueue(carmy::runtime::execution_request("queue_more", json!({})))
+        .await
+        .unwrap();
+    assert_eq!(
+        jobs.run_due(10).await.unwrap(),
+        1,
+        "runs while the runtime lives"
+    );
+    drop(runtime);
+    assert!(weak.upgrade().is_none(), "the runtime was freed");
+    // The queue outlives it, and says so instead of running jobs on nothing.
+    assert_eq!(jobs.run_due(10).await.unwrap_err().code, "JOBS_UNBOUND");
+}
