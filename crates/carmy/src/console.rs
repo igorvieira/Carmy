@@ -243,6 +243,7 @@ impl Session {
         let reusable = self.runtime.metadata(&tool).is_some_and(|m| {
             m.idempotent && matches!(m.effect, crate::Effect::None | crate::Effect::Read)
         });
+        let next = crate::next_actions(&tool, result.outcome.as_ref());
         let mut dto = Map::new();
         dto.insert("execution_id".into(), result.execution_id.into());
         dto.insert("status".into(), result.status.as_str().into());
@@ -253,7 +254,7 @@ impl Session {
         };
         dto.insert(
             "_agent".into(),
-            json!({ "cacheable": reusable && ok, "next_actions": [] }),
+            json!({ "cacheable": reusable && ok, "next_actions": next }),
         );
         dto.insert("replayed".into(), replayed.into());
         dto.insert(

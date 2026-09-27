@@ -50,6 +50,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (1, include_str!("../migrations/0001_carmy.sql")),
     (2, include_str!("../migrations/0002_audit.sql")),
     (3, include_str!("../migrations/0003_retention.sql")),
+    (4, include_str!("../migrations/0004_job_results.sql")),
 ];
 
 /// Creates or updates the `carmy_*` tables. Idempotent, and safe to run from several
@@ -247,7 +248,7 @@ impl PostgresJobStore {
 
 const COLUMNS: &str = "id, tool, arguments, request_id, metadata, principal, session, permissions, \
                        context_metadata, run_at, created_at, attempts, max_attempts, status, \
-                       last_error, lease_until, schedule";
+                       last_error, lease_until, schedule, result";
 
 async fn insert<'e, E>(executor: E, job: &Job) -> AgentResult<JobId>
 where
@@ -358,6 +359,7 @@ fn job_from_row(row: &PgRow) -> AgentResult<Job> {
             .map_err(|e| AgentError::new("STORE_ERROR", e.to_string(), ErrorCategory::Internal))?,
         lease_until: row.get("lease_until"),
         schedule: row.get("schedule"),
+        result: row.get("result"),
     })
 }
 
@@ -452,8 +454,12 @@ impl JobStore for PostgresJobStore {
     fn finish<'a>(&'a self, id: &'a JobId, outcome: JobOutcome) -> StoreFuture<'a, ()> {
         Box::pin(async move {
             let error = |e: &AgentError| serde_json::to_value(e).expect("errors serialize");
+            let result = match &outcome {
+                JobOutcome::Succeeded(output) => Some(output.clone()),
+                _ => None,
+            };
             let (status, run_at, last_error) = match &outcome {
-                JobOutcome::Succeeded => ("succeeded", None, None),
+                JobOutcome::Succeeded(_) => ("succeeded", None, None),
                 JobOutcome::Retry { at, error: e } => ("queued", Some(*at), Some(error(e))),
                 JobOutcome::Failed(e) => ("failed", None, Some(error(e))),
                 JobOutcome::DeadLettered(e) => ("dead_lettered", None, Some(error(e))),
@@ -461,13 +467,15 @@ impl JobStore for PostgresJobStore {
             sqlx::query(
                 "UPDATE carmy_jobs SET status = $1, run_at = COALESCE($2, run_at), \
                  last_error = $3, lease_until = NULL, \
-                 finished_at = CASE WHEN $1 = 'queued' THEN NULL ELSE now() END \
+                 finished_at = CASE WHEN $1 = 'queued' THEN NULL ELSE now() END, \
+                 result = $5 \
                  WHERE id = $4",
             )
             .bind(status)
             .bind(run_at)
             .bind(last_error)
             .bind(&id.0)
+            .bind(result)
             .execute(&self.pool)
             .await
             .map_err(store_error)?;

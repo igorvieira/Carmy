@@ -17,7 +17,8 @@
 //!   invalid-params error.
 //! - `_meta["carmy/request_id"]` on `tools/call` is the idempotency identity.
 //! - Errors carry `_meta["carmy/execution_id"]` and `_meta["carmy/status"]`; successful
-//!   results do too with [`McpServer::execution_meta`].
+//!   results do too with [`McpServer::execution_meta`]. When Carmy knows what to do
+//!   next (retry, confirm, poll a job), `_meta["carmy/next_actions"]` says so.
 use carmy_core::*;
 use carmy_runtime::{Runtime, execution_request};
 use rmcp::{
@@ -147,25 +148,33 @@ fn request_id(params: &CallToolRequestParams, ctx: &RequestContext<RoleServer>) 
 /// Errors never use `structuredContent`: clients validate it against the tool's output
 /// schema even when `isError` is set. The error travels as JSON text for the model and,
 /// complete, in `_meta["carmy/error"]` for programs.
-fn to_mcp(result: ExecutionResult, execution_meta: bool) -> CallToolResult {
+fn to_mcp(tool: &str, result: ExecutionResult, execution_meta: bool) -> CallToolResult {
     let ExecutionResult {
         execution_id,
         status,
         outcome,
     } = result;
+    let next = next_actions(tool, outcome.as_ref());
+    let has_next = !next.is_empty();
     let meta = move || {
         let mut meta = JsonObject::new();
         meta.insert("carmy/status".into(), status.as_str().into());
         meta.insert("carmy/execution_id".into(), execution_id.into());
+        if !next.is_empty() {
+            let next = serde_json::to_value(next).expect("actions serialize");
+            meta.insert("carmy/next_actions".into(), next);
+        }
         meta
     };
     match outcome {
         Ok(value) => {
+            // Suggestions are useful enough to send even without `execution_meta`.
+            let send_meta = execution_meta || has_next;
             let call = match value {
                 value @ Value::Object(_) => CallToolResult::structured(value),
                 value => CallToolResult::success(vec![ContentBlock::text(value.to_string())]),
             };
-            match execution_meta {
+            match send_meta {
                 true => call.with_meta(Some(MetaObject(meta()))),
                 false => call,
             }
@@ -198,6 +207,7 @@ impl ServerHandler for McpServer {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
         let request_id = request_id(&params, &ctx);
+        let tool = params.name.to_string();
         let arguments = Value::Object(params.arguments.unwrap_or_default());
         let mut request = execution_request(params.name, arguments);
         request.request_id = request_id;
@@ -248,6 +258,6 @@ impl ServerHandler for McpServer {
                 Some(json!({ "error": error })),
             ));
         }
-        Ok(to_mcp(result, self.execution_meta).into())
+        Ok(to_mcp(&tool, result, self.execution_meta).into())
     }
 }

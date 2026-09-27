@@ -100,9 +100,13 @@ async fn jobs_enqueue_claim_and_finish() {
             .is_empty()
     );
 
-    store.finish(&a, JobOutcome::Succeeded).await.unwrap();
+    store
+        .finish(&a, JobOutcome::Succeeded(json!("ok")))
+        .await
+        .unwrap();
     let done = store.get(&a).await.unwrap().unwrap();
     assert_eq!(done.status, JobStatus::Succeeded);
+    assert_eq!(done.result, Some(json!("ok")), "the output is kept");
     assert!(done.lease_until.is_none());
     // A finished identity is free again.
     assert_ne!(store.enqueue(job("a", "r-a")).await.unwrap(), a);
@@ -200,7 +204,7 @@ async fn migrations_are_carmys_own_and_safe_to_repeat() {
             .fetch_all(&pool)
             .await
             .unwrap();
-    assert_eq!(versions, vec![1, 2, 3]);
+    assert_eq!(versions, vec![1, 2, 3, 4]);
     // The app's own sqlx migrations are none of Carmy's business.
     let touched: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM information_schema.tables \
@@ -223,8 +227,8 @@ async fn cleanup_deletes_only_what_retention_lets_go() {
     let now = Utc::now();
     let mut ids = Vec::new();
     for (name, outcome) in [
-        ("old-done", Some(JobOutcome::Succeeded)),
-        ("new-done", Some(JobOutcome::Succeeded)),
+        ("old-done", Some(JobOutcome::Succeeded(json!("ok")))),
+        ("new-done", Some(JobOutcome::Succeeded(json!("ok")))),
         (
             "old-dead",
             Some(JobOutcome::DeadLettered(AgentError::new(

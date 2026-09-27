@@ -82,11 +82,26 @@ async fn an_agent_follows_an_enqueued_delivery_with_carmy_job() {
         queued["_agent"]["cacheable"], false,
         "status changes over time"
     );
+    assert_eq!(
+        queued["_agent"]["next_actions"][0],
+        json!({"tool": "carmy_job", "arguments": {"job_id": job_id}, "reason": "The job has not finished yet", "after_ms": 1000})
+    );
+    assert_eq!(accepted["_agent"]["next_actions"][0]["tool"], "carmy_job");
+    assert_eq!(
+        accepted["_agent"]["next_actions"][0]["arguments"]["job_id"],
+        job_id
+    );
 
     jobs.run_due(10).await.unwrap();
     let (_, done) = call(&app, "carmy_job", json!({ "job_id": job_id })).await;
     assert_eq!(done["data"]["status"], "succeeded");
     assert_eq!(done["data"]["attempts"], 1);
+    assert_eq!(done["data"]["result"], "7", "the tool's output");
+    assert_eq!(
+        done["_agent"]["next_actions"],
+        json!([]),
+        "nothing left to do"
+    );
 
     let (status, missing) = call(&app, "carmy_job", json!({ "job_id": "job_nope" })).await;
     assert_eq!(status, 404);

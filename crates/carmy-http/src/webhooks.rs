@@ -242,12 +242,28 @@ async fn receive(State(state): State<WebhookState>, headers: HeaderMap, body: By
         let enqueuer = state.enqueuer.as_ref().expect("checked at build");
         let request_id = request.request_id.clone();
         return match enqueuer.enqueue(request).await {
-            Ok(job_id) => (
-                StatusCode::ACCEPTED,
-                no_store,
-                Json(json!({ "job_id": job_id, "request_id": request_id })),
-            )
-                .into_response(),
+            Ok(job_id) => {
+                // Point the agent at the job, when the app offers the status tool.
+                let next = state
+                    .runtime
+                    .metadata(carmy_core::JOB_STATUS_TOOL)
+                    .map(|_| carmy_core::NextAction {
+                        tool: carmy_core::JOB_STATUS_TOOL.into(),
+                        arguments: Some(json!({ "job_id": job_id })),
+                        reason: "The delivery was queued; follow the job".into(),
+                        after_ms: None,
+                    });
+                (
+                    StatusCode::ACCEPTED,
+                    no_store,
+                    Json(json!({
+                        "job_id": job_id,
+                        "request_id": request_id,
+                        "_agent": { "next_actions": next.into_iter().collect::<Vec<_>>() },
+                    })),
+                )
+                    .into_response()
+            }
             Err(error) => (
                 status_of(Some(&error)),
                 no_store,
@@ -257,7 +273,8 @@ async fn receive(State(state): State<WebhookState>, headers: HeaderMap, body: By
         };
     }
     let reusable = reusable(state.runtime.metadata(&request.tool));
-    let dto = ResultDto::new(state.runtime.execute(request).await, reusable);
+    let dto = ResultDto::new(state.runtime.execute(request).await, reusable)
+        .with_next_actions(&state.hook.tool);
     (status_of(dto.error.as_ref()), no_store, Json(dto)).into_response()
 }
 

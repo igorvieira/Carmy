@@ -159,9 +159,10 @@ impl JobStore for InMemoryJobStore {
             };
             job.lease_until = None;
             match outcome {
-                JobOutcome::Succeeded => {
+                JobOutcome::Succeeded(output) => {
                     job.status = JobStatus::Succeeded;
                     job.last_error = None;
+                    job.result = Some(output);
                 }
                 JobOutcome::Retry { at, error } => {
                     job.status = JobStatus::Queued;

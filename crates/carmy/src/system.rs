@@ -38,6 +38,8 @@ pub struct JobView {
     pub run_at: String,
     /// The last error, in the usual structured form.
     pub last_error: Option<Value>,
+    /// What the tool returned, once the job succeeded.
+    pub result: Option<Value>,
 }
 
 impl From<Job> for JobView {
@@ -53,6 +55,7 @@ impl From<Job> for JobView {
             last_error: job
                 .last_error
                 .map(|e| serde_json::to_value(e).expect("errors serialize")),
+            result: job.result,
         }
     }
 }
@@ -84,7 +87,7 @@ impl Tool for JobStatus {
     fn metadata(&self) -> ToolMetadata {
         read_tool::<JobInput, JobView>(
             JOB_TOOL,
-            "Status of a job: queued, running, succeeded, failed, dead_lettered or cancelled, with attempts and the last error. Use the job_id an enqueue returned.",
+            "Status of a job: queued, running, succeeded, failed, dead_lettered or cancelled, with attempts, the last error, and the result once it succeeded. Use the job_id an enqueue returned.",
         )
     }
     async fn execute(&self, _: AgentContext, input: JobInput) -> AgentResult<JobView> {

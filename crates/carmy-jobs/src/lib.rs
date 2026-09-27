@@ -135,12 +135,16 @@ pub struct Job {
     pub lease_until: Option<DateTime<Utc>>,
     /// The schedule that produced this job, if any.
     pub schedule: Option<String>,
+    /// The tool's output, once the job succeeded.
+    #[serde(default)]
+    pub result: Option<Value>,
 }
 
 /// What a worker reports to the store after running a job.
 #[derive(Debug, Clone, PartialEq)]
 pub enum JobOutcome {
-    Succeeded,
+    /// The tool's output.
+    Succeeded(Value),
     Retry {
         at: DateTime<Utc>,
         error: AgentError,
@@ -358,6 +362,7 @@ impl Jobs {
             last_error: None,
             lease_until: None,
             schedule: None,
+            result: None,
         }
     }
 
@@ -581,7 +586,7 @@ impl Jobs {
         };
         let result = runtime.execute(request).await;
         heartbeat.abort();
-        let outcome = self.outcome(&job, &runtime, result.status, result.outcome.err());
+        let outcome = self.outcome(&job, &runtime, result.status, result.outcome);
         tracing::info!(outcome = ?outcome_name(&outcome), "job finished");
         if let Err(e) = self.inner.store.finish(&job.id, outcome).await {
             tracing::error!(job = %job.id, error = %e, "job outcome could not be recorded");
@@ -594,10 +599,11 @@ impl Jobs {
         job: &Job,
         runtime: &Runtime,
         status: ExecutionStatus,
-        error: Option<AgentError>,
+        outcome: AgentResult<Value>,
     ) -> JobOutcome {
-        let Some(error) = error else {
-            return JobOutcome::Succeeded;
+        let error = match outcome {
+            Ok(output) => return JobOutcome::Succeeded(output),
+            Err(error) => error,
         };
         let exhausted = job.attempts >= job.max_attempts;
         let uncertain = matches!(
@@ -644,7 +650,7 @@ impl Jobs {
 
 fn outcome_name(outcome: &JobOutcome) -> &'static str {
     match outcome {
-        JobOutcome::Succeeded => "succeeded",
+        JobOutcome::Succeeded(_) => "succeeded",
         JobOutcome::Retry { .. } => "retry",
         JobOutcome::Failed(_) => "failed",
         JobOutcome::DeadLettered(_) => "dead_lettered",

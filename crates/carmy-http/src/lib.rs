@@ -61,7 +61,8 @@ pub struct ResultDto {
 pub struct AgentHints {
     /// The client may reuse this result for identical arguments.
     pub cacheable: bool,
-    pub next_actions: Vec<String>,
+    /// Steps the agent can take next; see [`carmy_core::next_actions`].
+    pub next_actions: Vec<NextAction>,
 }
 impl ResultDto {
     /// `reusable` states whether the tool is idempotent and free of writes.
@@ -81,6 +82,16 @@ impl ResultDto {
             data,
             error,
         }
+    }
+    /// Fill `_agent.next_actions` for a call of `tool`.
+    pub fn with_next_actions(mut self, tool: &str) -> Self {
+        let outcome = match (&self.data, &self.error) {
+            (_, Some(error)) => Err(error),
+            (Some(data), None) => Ok(data),
+            (None, None) => return self,
+        };
+        self.agent.next_actions = next_actions(tool, outcome);
+        self
     }
 }
 pub(crate) fn reusable(tool: Option<&ToolMetadata>) -> bool {
@@ -291,23 +302,30 @@ async fn execute(
         Ok(r) => r,
         Err(response) => return *response,
     };
-    let reusable = reusable(state.runtime.metadata(&request.tool));
+    // Borrowed from the runtime, not the request, so it outlives `execute(request)`
+    // without copying the tool name on the hot path.
+    let metadata = state.runtime.metadata(&request.tool);
+    let reusable = reusable(metadata);
     if stream {
+        let tool = request.tool.clone();
         let events = state
             .runtime
             .execute_stream(request)
-            .map(move |event| Ok::<_, Infallible>(sse_event(event, reusable)));
+            .map(move |event| Ok::<_, Infallible>(sse_event(event, reusable, &tool)));
         return Sse::new(events)
             .keep_alive(KeepAlive::default())
             .into_response();
     }
-    let dto = ResultDto::new(state.runtime.execute(request).await, reusable);
+    // An unknown tool has no metadata, and nothing to suggest.
+    let tool = metadata.map_or("", |m| m.name.as_str());
+    let dto =
+        ResultDto::new(state.runtime.execute(request).await, reusable).with_next_actions(tool);
     let status = status_of(dto.error.as_ref());
     (status, [(header::CACHE_CONTROL, "no-store")], Json(dto)).into_response()
 }
 /// SSE is only the wire encoding of runtime events. `execution.completed` carries the
 /// same `ResultDto` a JSON response would, plus `replayed`.
-fn sse_event(event: ExecutionEvent, reusable: bool) -> Event {
+fn sse_event(event: ExecutionEvent, reusable: bool, tool: &str) -> Event {
     let name = event.name();
     let data = match event {
         ExecutionEvent::ExecutionStarted { execution_id, tool }
@@ -327,7 +345,8 @@ fn sse_event(event: ExecutionEvent, reusable: bool) -> Event {
         }),
         ExecutionEvent::ExecutionCompleted { result, replayed } => {
             let mut data =
-                serde_json::to_value(ResultDto::new(result, reusable)).expect("DTO serializes");
+                serde_json::to_value(ResultDto::new(result, reusable).with_next_actions(tool))
+                    .expect("DTO serializes");
             data["replayed"] = replayed.into();
             data
         }

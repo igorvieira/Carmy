@@ -303,6 +303,62 @@ pub enum ExecutionEvent {
         replayed: bool,
     },
 }
+/// A step an agent can take next, suggested by Carmy when it knows one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct NextAction {
+    /// The tool to call.
+    pub tool: String,
+    /// Its arguments; absent means the same arguments as the call just made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<Value>,
+    /// Why, for the model and for people reading logs.
+    pub reason: String,
+    /// Wait this long first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_ms: Option<u64>,
+}
+
+/// Name of the job-status tool every Carmy app registers.
+pub const JOB_STATUS_TOOL: &str = "carmy_job";
+
+/// The next steps Carmy knows after a call of `tool` ended with `outcome`:
+///
+/// - a retryable error: the same call, with the same `request_id`, after `retry_after`;
+/// - `CONFIRMATION_REQUIRED`: the same call, once a person confirmed;
+/// - a `carmy_job` answer for a job still queued or running: ask again in a second.
+///
+/// Anything else suggests nothing: an empty list is an answer, not a gap.
+pub fn next_actions(tool: &str, outcome: Result<&Value, &AgentError>) -> Vec<NextAction> {
+    match outcome {
+        Err(error) if error.code == "CONFIRMATION_REQUIRED" => vec![NextAction {
+            tool: tool.to_owned(),
+            arguments: None,
+            reason: format!(
+                "Ask a person to confirm, then call again with the confirm:{tool} permission"
+            ),
+            after_ms: None,
+        }],
+        Err(error) if error.retryable => vec![NextAction {
+            tool: tool.to_owned(),
+            arguments: None,
+            reason: "Retry the same call with the same request_id".into(),
+            after_ms: error.retry_after.map(|seconds| seconds * 1000),
+        }],
+        Ok(job)
+            if tool == JOB_STATUS_TOOL
+                && matches!(job["status"].as_str(), Some("queued" | "running")) =>
+        {
+            vec![NextAction {
+                tool: JOB_STATUS_TOOL.into(),
+                arguments: Some(serde_json::json!({ "job_id": job["job_id"] })),
+                reason: "The job has not finished yet".into(),
+                after_ms: Some(1000),
+            }]
+        }
+        _ => Vec::new(),
+    }
+}
+
 impl ExecutionEvent {
     /// Stable dotted name, e.g. `execution.started`.
     pub fn name(&self) -> &'static str {
@@ -318,6 +374,39 @@ impl ExecutionEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn next_actions_follow_what_carmy_knows() {
+        let busy = AgentError::new("BUSY", "later", ErrorCategory::Capacity).retryable(Some(5));
+        let retry = next_actions("publish", Err(&busy));
+        assert_eq!(retry.len(), 1);
+        assert_eq!(retry[0].tool, "publish");
+        assert_eq!(retry[0].arguments, None, "the same arguments");
+        assert_eq!(retry[0].after_ms, Some(5000));
+
+        let confirm = AgentError::new(
+            "CONFIRMATION_REQUIRED",
+            "confirm",
+            ErrorCategory::Permission,
+        );
+        let ask = next_actions("wipe", Err(&confirm));
+        assert!(ask[0].reason.contains("confirm:wipe"));
+
+        let running = serde_json::json!({"job_id": "job_1", "status": "running"});
+        let poll = next_actions(JOB_STATUS_TOOL, Ok(&running));
+        assert_eq!(
+            poll[0].arguments,
+            Some(serde_json::json!({"job_id": "job_1"}))
+        );
+        assert_eq!(poll[0].after_ms, Some(1000));
+
+        let done = serde_json::json!({"job_id": "job_1", "status": "succeeded"});
+        assert!(next_actions(JOB_STATUS_TOOL, Ok(&done)).is_empty());
+        let fatal = AgentError::new("BAD", "no", ErrorCategory::Validation);
+        assert!(next_actions("publish", Err(&fatal)).is_empty());
+        assert!(next_actions("publish", Ok(&serde_json::json!(1))).is_empty());
+        let wire = serde_json::to_value(&retry[0]).unwrap();
+        assert!(wire.get("arguments").is_none());
+    }
     #[test]
     fn errors_and_effects_are_machine_readable() {
         let e = AgentError::new("DENIED", "Permission required", ErrorCategory::Permission);
