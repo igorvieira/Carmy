@@ -25,7 +25,12 @@ Carmy is at `0.4.0`, and its API is unstable during 0.x.
 ## Out of scope
 
 - a custom async runtime, HTTP parser or TLS stack
-- an ORM, a distributed scheduler or a full workflow engine
+- an ORM
+- a workflow engine: no DAGs of steps, sagas or state kept between steps. Carmy's
+  [jobs](/guides/jobs/) run **one tool call later**, with retries and schedules, and
+  that is where they stop
+- a distributed scheduler beyond that: no leader election or cluster membership; the
+  database's row locks are the only coordination
 - agent memory, a vector database, an LLM abstraction, a prompt framework or a model router
 
 ## Contributing

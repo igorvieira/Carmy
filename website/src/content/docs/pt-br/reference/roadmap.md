@@ -26,7 +26,12 @@ O Carmy está na versão `0.4.0`, e a API é instável durante a série 0.x.
 ## Fora do escopo
 
 - um runtime assíncrono, parser HTTP ou stack TLS próprios
-- um ORM, um scheduler distribuído ou uma engine de workflow completa
+- um ORM
+- uma engine de workflow: sem DAGs de passos, sagas ou estado guardado entre passos. Os
+  [jobs](/pt-br/guides/jobs/) do Carmy rodam **uma chamada de tool depois**, com retries e
+  agendamentos, e param aí
+- um scheduler distribuído além disso: sem eleição de líder nem membership de cluster; os
+  locks de linha do banco são a única coordenação
 - memória de agente, banco vetorial, abstração de LLM, framework de prompts ou roteador de modelos
 
 ## Contribuindo

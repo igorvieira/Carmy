@@ -56,4 +56,5 @@ Estes são retornados por `build()`, `run()` e `listen()` como `carmy::Error::Re
 | `WEBHOOK_UNAUTHORIZED` | `permission` | a entrega não passou na verificação `.verify(..)` do webhook (HTTP 401) |
 | `READY_TIMEOUT` | `timeout` | um check de readiness levou mais de 5 segundos |
 | `WORKER_DOWN` | `capacity` | o `.require_worker(within)` não viu um worker marcar a fila a tempo |
+| `JOB_NOT_FOUND` | `not_found` | o `carmy_job` recebeu um `job_id` que não existe, ou que foi apagado |
 | `UNAVAILABLE` | `not_found` | o `audit` ou `dead` do console sem trilha ou fila anexadas |

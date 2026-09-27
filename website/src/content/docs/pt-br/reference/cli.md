@@ -71,6 +71,8 @@ Uma aplicação Carmy construída com `carmy::run()` aceita:
 | `cargo run -- tools` | imprime o catálogo de tools em JSON |
 | `cargo run -- console` | serve `carmy-console/1` pelo stdio |
 | `cargo run -- worker` | roda os jobs e os agendamentos |
+| `cargo run -- migrate` | cria ou atualiza as tabelas do Carmy; com um [banco](/pt-br/guides/postgres/) |
+| `cargo run -- cleanup` | apaga linhas além da retenção; com um banco |
 | `cargo run -- <seu>` | um comando adicionado com `.command(..)` |
 
 Os mesmos comandos funcionam no binário compilado: `./target/release/shop mcp`.

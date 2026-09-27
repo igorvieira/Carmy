@@ -31,6 +31,19 @@ The `[jobs]` table configures the worker (see [Jobs](/guides/jobs/)):
 | `jobs.concurrency` | `CARMY_JOBS_CONCURRENCY` | `4` |
 | `jobs.max_attempts` | `CARMY_JOBS_MAX_ATTEMPTS` | `5` |
 
+The `[database]` table moves jobs, idempotency and audit to Postgres (feature
+`postgres`; see [Postgres](/guides/postgres/)):
+
+| key | env var | default |
+|-----|---------|---------|
+| `database.url` | `CARMY_DATABASE_URL`, then `DATABASE_URL` | none: stores stay in memory |
+| `database.jobs_retention_days` | | `30` |
+| `database.idempotency_retention_days` | | `7` |
+| `database.audit_retention_days` | | `90` |
+
+A `database.url` without the `postgres` feature is a configuration error, not a silent
+fallback to memory.
+
 `CARMY_CONFIG=path/to/file.toml` reads another file. Unknown keys are errors, so typos
 don't go unnoticed:
 
@@ -49,6 +62,8 @@ invalid configuration: carmy.toml: unknown field `adress`, expected one of `name
 | `tools` | print the tool catalog as JSON and exit |
 | `console` | serve `carmy-console/1` on stdio (see [Console](/guides/console/)) |
 | `worker` | run the jobs and the schedules (see [Jobs](/guides/jobs/)) |
+| `migrate` | create or update Carmy's tables; with a database |
+| `cleanup` | delete rows past their retention; with a database |
 | *(yours)* | anything added with `.command(..)` (see [Readiness and routes](/guides/readiness/#own-commands)) |
 
 ## Builder
@@ -62,10 +77,9 @@ carmy::app()
     .timeout(std::time::Duration::from_secs(10))
     .state(db)
     .policy(RequireToolPermission)
-    .jobs(Arc::new(PostgresJobStore::new(pool.clone())))
+    .database("postgres://localhost/shop")
     .schedule("collect", "0 */5 * * * * *", || execution_request("collect_offers", json!({})))
     .webhook("/webhooks/billing", Webhook::to("billing_event").verify(verify::hmac_sha256(secret, "X-Signature")).event_id("/id").enqueue())
-    .ready("database", move || carmy::postgres::ready(pool.clone()))
     .routes(site)
     .run()
     .await

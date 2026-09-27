@@ -31,6 +31,19 @@ A tabela `[jobs]` configura o worker (veja [Jobs](/pt-br/guides/jobs/)):
 | `jobs.concurrency` | `CARMY_JOBS_CONCURRENCY` | `4` |
 | `jobs.max_attempts` | `CARMY_JOBS_MAX_ATTEMPTS` | `5` |
 
+A tabela `[database]` leva jobs, idempotência e auditoria para o Postgres (feature
+`postgres`; veja [Postgres](/pt-br/guides/postgres/)):
+
+| chave | variável de ambiente | padrão |
+|-------|----------------------|--------|
+| `database.url` | `CARMY_DATABASE_URL`, depois `DATABASE_URL` | nenhum: os stores ficam em memória |
+| `database.jobs_retention_days` | | `30` |
+| `database.idempotency_retention_days` | | `7` |
+| `database.audit_retention_days` | | `90` |
+
+Um `database.url` sem a feature `postgres` é um erro de configuração, não uma volta
+silenciosa para a memória.
+
 `CARMY_CONFIG=caminho/para/arquivo.toml` lê outro arquivo. Chaves desconhecidas são
 erros, então erros de digitação não passam despercebidos:
 
@@ -49,6 +62,8 @@ O `run()` escolhe o que fazer pelo primeiro argumento da linha de comando:
 | `tools` | imprime o catálogo de tools em JSON e sai |
 | `console` | serve `carmy-console/1` pelo stdio (veja [Console](/pt-br/guides/console/)) |
 | `worker` | roda os jobs e os agendamentos (veja [Jobs](/pt-br/guides/jobs/)) |
+| `migrate` | cria ou atualiza as tabelas do Carmy; com um banco |
+| `cleanup` | apaga linhas além da retenção; com um banco |
 | *(seus)* | qualquer um adicionado com `.command(..)` (veja [Readiness e rotas](/pt-br/guides/readiness/#comandos-próprios)) |
 
 ## Builder
@@ -62,10 +77,9 @@ carmy::app()
     .timeout(std::time::Duration::from_secs(10))
     .state(db)
     .policy(RequireToolPermission)
-    .jobs(Arc::new(PostgresJobStore::new(pool.clone())))
+    .database("postgres://localhost/shop")
     .schedule("collect", "0 */5 * * * * *", || execution_request("collect_offers", json!({})))
     .webhook("/webhooks/billing", Webhook::to("billing_event").verify(verify::hmac_sha256(secret, "X-Signature")).event_id("/id").enqueue())
-    .ready("database", move || carmy::postgres::ready(pool.clone()))
     .routes(site)
     .run()
     .await

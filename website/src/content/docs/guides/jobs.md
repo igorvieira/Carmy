@@ -94,15 +94,39 @@ Cron expressions have seven fields, seconds first. Every occurrence becomes a jo
 enqueue it once. A worker that was down enqueues the occurrences it missed in the last
 minute, and no more.
 
+## For agents
+
+Every app has a `carmy_job` tool: given the `job_id` an enqueue returned, it answers the
+job's status, attempts, next run and last error. It never returns the job's arguments.
+Because it is a tool, it works over HTTP, MCP and the console alike, and goes through
+the same policies as any other.
+
+```json
+{ "tool": "carmy_job", "arguments": { "job_id": "job_4f0c…" } }
+→ { "status": "completed", "data": { "job_id": "job_4f0c…", "tool": "publish_premium",
+    "status": "dead_lettered", "attempts": 5, "max_attempts": 5,
+    "run_at": "2026-09-27T10:00:00+00:00", "request_id": "publish-42-premium",
+    "last_error": { "code": "PUBLISHER_BUSY", … } } }
+```
+
+`Carmy::operator_tools()` adds two more, for agents that operate the service:
+
+| tool | answers |
+|------|---------|
+| `carmy_dead_letters` | the jobs waiting for a decision |
+| `carmy_audit` | the latest executions: who, which tool, how it ended |
+
+They reveal who ran what, so pair them with a policy such as `RequireToolPermission`.
+The `carmy_` names are reserved: an app tool with one of them fails to register.
+
 ## Stores
 
 `InMemoryJobStore` is the default: process-local, bounded, for development and tests.
-In production use `carmy::postgres::PostgresJobStore` (feature `postgres`):
+In production, set a database (feature `postgres`) and the queue moves to Postgres:
 
-```rust
-let pool = carmy::postgres::connect(&url).await?;
-carmy::postgres::migrate(&pool).await?;
-carmy::app().jobs(Arc::new(PostgresJobStore::new(pool.clone())))
+```toml
+[database]
+url = "postgres://localhost/shop"   # or DATABASE_URL
 ```
 
 Workers claim with `FOR UPDATE SKIP LOCKED`, so any number of them share a queue, and

@@ -51,13 +51,17 @@ CORS. Tudo o que o Axum aceita funciona, inclusive middleware seu no router comb
 
 ```rust
 carmy::app()
-    .command("migrate", |app| Box::pin(async move {
-        let pool = connect(&std::env::var("DATABASE_URL")?).await?;
-        carmy::postgres::migrate(&pool).await?;
+    .command("seed", |app| async move {
+        let runtime = app.build()?;
+        // … carrega dados pelo runtime, com todas as garantias
         Ok(())
-    }))
+    })
 ```
 
-`cargo run -- migrate` o executa. A closure recebe o builder, então pode construir o
+`cargo run -- seed` o executa. A closure recebe o builder, então pode construir o
 runtime ou ler o estado dele. Os comandos embutidos (`server`, `worker`, `mcp`,
-`console`, `tools`) continuam, e um comando desconhecido lista todos, os seus incluídos.
+`console`, `tools`, e `migrate` e `cleanup` com um [banco](/pt-br/guides/postgres/))
+continuam; um comando seu com o mesmo nome substitui o embutido. Um comando desconhecido
+lista todos, os seus incluídos.
+
+Com um banco, o check de readiness `database` é adicionado sozinho.

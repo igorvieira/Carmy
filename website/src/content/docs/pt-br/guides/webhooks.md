@@ -80,6 +80,9 @@ Os webhooks aparecem na descoberta e no console (`webhooks`), nunca com os segre
 ]
 ```
 
+Uma entrega enfileirada responde com um `job_id`; o agente acompanha pela tool
+[`carmy_job`](/pt-br/guides/jobs/#para-agentes).
+
 Um agente que precisa reprocessar ou simular uma entrega chama a tool direto com o
 payload e o mesmo `request_id`. É o mesmo caminho, com o mesmo efeito, replay e
 auditoria, e sem assinatura para forjar.

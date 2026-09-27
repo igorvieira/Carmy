@@ -51,6 +51,9 @@ audit 20            -> the latest records, newest first
 dead                -> jobs in the dead-letter queue
 ```
 
+Agents read the same trail through the `carmy_audit` tool, which
+[`operator_tools()`](/guides/jobs/#for-agents) adds.
+
 `carmy::postgres::cleanup` deletes audit records past their retention (90 days by
 default); see [Postgres](/guides/postgres/#retention).
 

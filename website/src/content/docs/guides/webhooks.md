@@ -80,6 +80,9 @@ secrets:
 ]
 ```
 
+An enqueued delivery answers with a `job_id`; the agent follows it with the
+[`carmy_job`](/guides/jobs/#for-agents) tool.
+
 An agent that needs to replay or simulate a delivery calls the tool directly with the
 payload and the same `request_id`. It is the same path, with the same effect, replay and
 audit, and no signature to forge.

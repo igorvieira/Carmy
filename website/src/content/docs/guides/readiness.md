@@ -53,13 +53,17 @@ merged router.
 
 ```rust
 carmy::app()
-    .command("migrate", |app| Box::pin(async move {
-        let pool = connect(&std::env::var("DATABASE_URL")?).await?;
-        carmy::postgres::migrate(&pool).await?;
+    .command("seed", |app| async move {
+        let runtime = app.build()?;
+        // … load fixtures through the runtime, with every guarantee
         Ok(())
-    }))
+    })
 ```
 
-`cargo run -- migrate` runs it. The closure receives the builder, so it can build the
+`cargo run -- seed` runs it. The closure receives the builder, so it can build the
 runtime or read its state. The built-in commands (`server`, `worker`, `mcp`, `console`,
-`tools`) stay, and an unknown command lists every one, yours included.
+`tools`, and `migrate` and `cleanup` with a [database](/guides/postgres/)) stay; a
+command of yours with the same name replaces one. An unknown command lists every one,
+yours included.
+
+With a database, the `database` readiness check is added for you.

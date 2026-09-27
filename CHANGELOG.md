@@ -6,6 +6,34 @@ All notable changes to Carmy are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Agents follow async work.** Every app registers `carmy_job`, a read-only tool that
+  answers a job's status, attempts, next run and last error from the `job_id` an
+  enqueue returned, never its arguments. It works over HTTP, MCP and the console alike
+  and goes through the same policies as any tool. `Carmy::operator_tools()` adds
+  `carmy_dead_letters` and `carmy_audit`. The `carmy_` names are reserved.
+- **Postgres from configuration.** `[database] url` in `carmy.toml`,
+  `CARMY_DATABASE_URL` or `DATABASE_URL` (feature `postgres`), or `Carmy::database(url)`,
+  moves jobs, idempotency and audit to Postgres. The pool connects on first use. Tools
+  can take `State<PgPool>` and `State<PostgresJobStore>`. `run()` migrates before any
+  command but `tools`. The `database` readiness check and the `migrate` and `cleanup`
+  commands come with it, and retention is configurable. A URL without the feature is a
+  configuration error.
+- `carmy_postgres::connect_lazy`.
+- New apps get commented `[jobs]` and `[database]` sections in `carmy.toml`.
+
+### Changed
+
+- `Carmy::command` takes a plain async closure: `|app| async move { .. }`. Closures
+  that return `Box::pin(..)` still compile.
+- `PostgresAudit` starts its writer on the first record, so an app can be built outside
+  a Tokio runtime.
+- The roadmap and README state the limits of jobs precisely. Jobs run one tool call
+  later; they are not a workflow engine or a cluster scheduler.
+- The curator reads its database from `DATABASE_URL` and no longer wires Postgres by
+  hand.
+
 ## [0.4.1] - 2026-09-26
 
 ### Fixed

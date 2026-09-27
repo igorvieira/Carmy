@@ -277,11 +277,9 @@ jobs.enqueue(execution_request("publish_premium", json!({ "deal_id": id }))
     .with_request_id(format!("publish-{id}-premium"))).await?;   // never twice
 jobs.enqueue_after(request, Duration::from_secs(24 * 3600)).await?;
 
-carmy::app()
-    .jobs(Arc::new(PostgresJobStore::new(pool.clone())))            // or the in-memory default
+carmy::app()   // [database] url in carmy.toml, or DATABASE_URL, makes all of it durable
     .schedule("collect", "0 */5 * * * * *", || execution_request("collect_offers", json!({})))
     .webhook("/webhooks/billing", Webhook::to("billing_event").verify(verify::hmac_sha256(secret, "X-Signature")).event_id("/id").enqueue())
-    .ready("database", move || carmy::postgres::ready(pool.clone()))
     .routes(site)
     .run().await   // `cargo run -- worker` runs the jobs
 ```
@@ -294,9 +292,15 @@ carmy::app()
   is a ready HMAC or shared-secret helper or your own function; an id read from the
   payload becomes the `request_id`, so a redelivery replays. Agents see the webhooks in
   discovery, never their secrets.
+- **Agents follow async work:** every app has a `carmy_job` tool that answers a job's
+  status from its `job_id`, over HTTP, MCP and the console alike.
+  `operator_tools()` adds `carmy_dead_letters` and `carmy_audit`.
 - **Every execution is audited:** who ran what, when, and how it ended, never the
   arguments or outputs. `carmy console` shows the trail with `audit` and the dead letters
   with `dead`.
+- **Postgres is a setting:** with the `postgres` feature, a database URL moves jobs,
+  idempotency and audit to Postgres, adds `State<PgPool>` for your tools, and the
+  `migrate` and `cleanup` commands.
 - **`/health` and `/ready`** answer for orchestrators, and the app's own routes and
   commands live next to the agent routes.
 
@@ -444,7 +448,10 @@ performance claims that these benchmarks cannot reproduce.
 - **Console:** the audit trail and the dead-letter queue in the terminal UI.
 
 Carmy will not add its own async runtime, HTTP parser, TLS stack, ORM, workflow engine,
-agent memory, LLM abstraction or prompt framework.
+agent memory, LLM abstraction or prompt framework. Jobs run one tool call later, with
+retries and schedules; they are not a workflow engine (no DAGs, sagas or state between
+steps) and not a cluster scheduler (the database's row locks are the only
+coordination).
 
 ## Sponsor
 

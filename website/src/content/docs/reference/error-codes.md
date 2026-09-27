@@ -56,4 +56,5 @@ These are returned by `build()`, `run()` and `listen()` as `carmy::Error::Regist
 | `WEBHOOK_UNAUTHORIZED` | `permission` | the delivery failed the webhook's `.verify(..)` check (HTTP 401) |
 | `READY_TIMEOUT` | `timeout` | a readiness check took longer than 5 seconds |
 | `WORKER_DOWN` | `capacity` | `.require_worker(within)` saw no worker tick in time |
+| `JOB_NOT_FOUND` | `not_found` | `carmy_job` got a `job_id` that does not exist, or was purged |
 | `UNAVAILABLE` | `not_found` | the console's `audit` or `dead` with no trail or queue attached |

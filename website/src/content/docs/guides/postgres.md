@@ -13,21 +13,53 @@ queue, the idempotency records and the audit trail in Postgres. Each piece is op
 carmy = { version = "0.4", features = ["postgres"] }
 ```
 
+Then give it a URL, like any other setting:
+
+```toml
+# carmy.toml
+[database]
+url = "postgres://localhost/shop"   # CARMY_DATABASE_URL, then DATABASE_URL, win over this
+```
+
+That is all. `carmy::app()` then:
+
+- keeps jobs, idempotency records and the audit trail in Postgres;
+- migrates Carmy's tables before any command but `tools`;
+- adds the `database` check to `/ready`;
+- adds the `migrate` and `cleanup` commands;
+- injects the pool into tools that take `State<PgPool>`, and the job store into those
+  that take `State<PostgresJobStore>` (for the outbox).
+
+```rust
+use carmy::postgres::sqlx::PgPool;
+
+#[carmy::tool(description = "Create an order", effect = "write")]
+async fn create_order(State(pool): State<PgPool>, input: NewOrder) -> AgentResult<Order> {
+    sqlx::query_as("INSERT INTO orders (sku) VALUES ($1) RETURNING id, sku")
+        .bind(input.sku)
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| AgentError::new("DB", e.to_string(), ErrorCategory::Internal).retryable(Some(1)))
+}
+```
+
+The pool connects on first use, so a database that is down at start makes `/ready` fail
+rather than the process. In code, `Carmy::database(url)` does the same as the setting.
+
+### Piece by piece
+
+Each store also works alone, on any `sqlx::PgPool`:
+
 ```rust
 use carmy::postgres::{PostgresAudit, PostgresIdempotencyStore, PostgresJobStore, connect, migrate};
 
-let pool = connect(&std::env::var("DATABASE_URL")?).await?;   // 8 connections, 5 s acquire timeout
+let pool = connect(&url).await?;   // 8 connections, 5 s acquire timeout
 migrate(&pool).await?;
-
 carmy::app()
     .jobs(Arc::new(PostgresJobStore::new(pool.clone())))
     .idempotency_store(Arc::new(PostgresIdempotencyStore::new(pool.clone())))
     .sink(Arc::new(PostgresAudit::new(pool.clone())))
-    .ready("database", move || carmy::postgres::ready(pool.clone()))
 ```
-
-`connect` is a convenience; any `sqlx::PgPool` works, including the one your app already
-has.
 
 ## Migrations
 
@@ -91,21 +123,23 @@ batches of 5000 rows, with ages on the database clock:
 A `request_id` retried after its idempotency record is gone **runs again**, so keep
 that retention longer than any client retries.
 
-Run it from a command, and schedule the command with cron, a Kubernetes CronJob or any
-scheduler:
-
-```rust
-carmy::app().command("cleanup", move |_| Box::pin(async move {
-    let cleaned = carmy::postgres::cleanup(&pool, Retention::default()).await?;
-    println!("{cleaned:?}");
-    Ok(())
-}))
-```
+With a database configured, the `cleanup` command runs it. Schedule the command with
+cron, a Kubernetes CronJob or any scheduler:
 
 ```console
 $ cargo run -- cleanup
 {"audit":1204,"idempotency":88,"jobs":5310}
 ```
+
+```toml
+[database]
+jobs_retention_days = 30
+idempotency_retention_days = 7
+audit_retention_days = 90
+```
+
+In code: `.retention(Retention { .. })`, or `carmy::postgres::cleanup(&pool, retention)`
+anywhere.
 
 `Jobs::purge(older_than)` does the job part through any `JobStore`, the in-memory one
 included.

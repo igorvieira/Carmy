@@ -51,6 +51,9 @@ audit 20            -> os últimos registros, mais novos primeiro
 dead                -> os jobs na fila de dead letters
 ```
 
+Agentes leem a mesma trilha pela tool `carmy_audit`, que o
+[`operator_tools()`](/pt-br/guides/jobs/#para-agentes) adiciona.
+
 O `carmy::postgres::cleanup` apaga os registros de auditoria além da retenção (90 dias
 por padrão); veja [Postgres](/pt-br/guides/postgres/#retenção).
 
