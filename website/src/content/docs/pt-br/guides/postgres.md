@@ -11,7 +11,7 @@ fila de jobs, os registros de idempotência e a trilha de auditoria no Postgres.
 peça é opcional.
 
 ```toml
-carmy = { version = "0.4", features = ["postgres"] }
+carmy = { version = "0.5", features = ["postgres"] }
 ```
 
 Depois, dê a ele uma URL, como qualquer outra configuração:

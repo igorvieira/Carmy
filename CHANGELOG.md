@@ -6,6 +6,8 @@ All notable changes to Carmy are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-27
+
 ### Added
 
 - **Agents follow async work.** Every app registers `carmy_job`, a read-only tool that
@@ -210,6 +212,7 @@ The first release.
 - **Tracing spans** for every execution, without recording payloads.
 - **Documentation** at https://carmy-pi.vercel.app, in English and Brazilian Portuguese.
 
+[0.5.0]: https://github.com/igorvieira/Carmy/releases/tag/v0.5.0
 [0.4.1]: https://github.com/igorvieira/Carmy/releases/tag/v0.4.1
 [0.4.0]: https://github.com/igorvieira/Carmy/releases/tag/v0.4.0
 [0.3.0]: https://github.com/igorvieira/Carmy/releases/tag/v0.3.0
