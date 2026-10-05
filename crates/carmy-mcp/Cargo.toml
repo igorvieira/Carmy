@@ -17,8 +17,8 @@ categories = ["asynchronous", "network-programming"]
 http = ["rmcp/transport-streamable-http-server", "dep:http"]
 
 [dependencies]
-carmy-core = { path = "../carmy-core", version = "0.6.0" }
-carmy-runtime = { path = "../carmy-runtime", version = "0.6.0" }
+carmy-core = { path = "../carmy-core", version = "0.6.1" }
+carmy-runtime = { path = "../carmy-runtime", version = "0.6.1" }
 rmcp = { version = "3.4", default-features = false, features = ["server", "transport-io", "elicitation"] }
 futures-util = "0.3"
 http = { version = "1", optional = true }

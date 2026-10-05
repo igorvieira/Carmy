@@ -5,7 +5,7 @@ sidebar:
   order: 6
 ---
 
-Carmy is at `0.6.0`, and its API is unstable during 0.x.
+Carmy is at `0.6.1`, and its API is unstable during 0.x.
 
 ## Next
 

@@ -22,18 +22,18 @@ redis = ["dep:carmy-redis", "dep:chrono"]
 openapi = ["dep:carmy-openapi"]
 
 [dependencies]
-carmy-core = { path = "../carmy-core", version = "0.6.0" }
-carmy-schema = { path = "../carmy-schema", version = "0.6.0" }
-carmy-macros = { path = "../carmy-macros", version = "0.6.0" }
-carmy-runtime = { path = "../carmy-runtime", version = "0.6.0" }
-carmy-jobs = { path = "../carmy-jobs", version = "0.6.0" }
-carmy-postgres = { path = "../carmy-postgres", version = "0.6.0", optional = true }
-carmy-redis = { path = "../carmy-redis", version = "0.6.0", optional = true }
-carmy-openapi = { path = "../carmy-openapi", version = "0.6.0", optional = true }
+carmy-core = { path = "../carmy-core", version = "0.6.1" }
+carmy-schema = { path = "../carmy-schema", version = "0.6.1" }
+carmy-macros = { path = "../carmy-macros", version = "0.6.1" }
+carmy-runtime = { path = "../carmy-runtime", version = "0.6.1" }
+carmy-jobs = { path = "../carmy-jobs", version = "0.6.1" }
+carmy-postgres = { path = "../carmy-postgres", version = "0.6.1", optional = true }
+carmy-redis = { path = "../carmy-redis", version = "0.6.1", optional = true }
+carmy-openapi = { path = "../carmy-openapi", version = "0.6.1", optional = true }
 chrono = { version = "0.4", optional = true }
-carmy-http = { path = "../carmy-http", version = "0.6.0", optional = true }
-carmy-mcp = { path = "../carmy-mcp", version = "0.6.0", optional = true }
-carmy-observability = { path = "../carmy-observability", version = "0.6.0", optional = true }
+carmy-http = { path = "../carmy-http", version = "0.6.1", optional = true }
+carmy-mcp = { path = "../carmy-mcp", version = "0.6.1", optional = true }
+carmy-observability = { path = "../carmy-observability", version = "0.6.1", optional = true }
 axum = { version = "0.8", optional = true }
 serde.workspace = true
 serde_json.workspace = true

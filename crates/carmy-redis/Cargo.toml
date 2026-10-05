@@ -12,9 +12,9 @@ keywords = ["agents", "redis", "jobs", "idempotency", "llm"]
 categories = ["database", "asynchronous"]
 
 [dependencies]
-carmy-core = { path = "../carmy-core", version = "0.6.0" }
-carmy-runtime = { path = "../carmy-runtime", version = "0.6.0" }
-carmy-jobs = { path = "../carmy-jobs", version = "0.6.0" }
+carmy-core = { path = "../carmy-core", version = "0.6.1" }
+carmy-runtime = { path = "../carmy-runtime", version = "0.6.1" }
+carmy-jobs = { path = "../carmy-jobs", version = "0.6.1" }
 chrono = { version = "0.4", features = ["serde"] }
 redis = { version = "1.7", default-features = false, features = ["tokio-comp", "aio", "script", "connection-manager", "tls-rustls", "tokio-rustls-comp"] }
 serde_json.workspace = true
