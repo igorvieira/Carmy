@@ -561,3 +561,47 @@ async fn the_audit_trail_is_written_off_the_execution_path() {
     assert_eq!(records[2].request_id.as_deref(), Some("audit-1"));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
+
+#[tokio::test]
+async fn a_hung_audit_insert_costs_one_record_not_the_writer() {
+    let Some((pool, _guard)) = database().await else {
+        return;
+    };
+    let audit = Arc::new(
+        PostgresAudit::with_capacity(pool.clone(), 4).insert_timeout(Duration::from_millis(200)),
+    );
+    let runtime = Runtime::new()
+        .sink(audit.clone())
+        .tool(Counting(Arc::new(AtomicUsize::new(0))))
+        .unwrap();
+
+    // A lock held by another session makes the insert wait, like a connection that
+    // stopped answering.
+    let mut blocker = pool.begin().await.unwrap();
+    sqlx::query("LOCK TABLE carmy_audit IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    runtime.execute(request("x").with_request_id("stuck")).await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    blocker.rollback().await.unwrap();
+
+    runtime.execute(request("y").with_request_id("after")).await;
+    let mut records = Vec::new();
+    for _ in 0..50 {
+        records = audit.recent(10).await.unwrap();
+        if !records.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let ids: Vec<_> = records
+        .iter()
+        .filter_map(|r| r.request_id.as_deref())
+        .collect();
+    assert_eq!(
+        ids,
+        ["after"],
+        "the stuck insert was given up and the writer went on"
+    );
+}

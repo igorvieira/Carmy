@@ -617,15 +617,21 @@ impl IdempotencyStore for PostgresIdempotencyStore {
 
 /// [`ExecutionSink`] on Postgres. Records go through a bounded channel to one writer
 /// task, so executions never wait on the database; when the channel is full, the
-/// record is dropped and a warning logged rather than slowing the runtime.
+/// record is dropped and a warning logged rather than slowing the runtime. Each insert
+/// is bounded by [`PostgresAudit::insert_timeout`], so a connection that stops
+/// answering costs one record instead of stalling the writer for good.
 pub struct PostgresAudit {
     pool: PgPool,
     capacity: usize,
+    insert_timeout: Duration,
     /// Started on the first record, so building an app needs no running runtime.
     writer: std::sync::OnceLock<(
         tokio::sync::mpsc::Sender<ExecutionRecord>,
         tokio::task::JoinHandle<()>,
     )>,
+    /// Records dropped since the last one accepted; a warning goes out when dropping
+    /// starts and when it stops, not once per record.
+    dropped: std::sync::atomic::AtomicU64,
 }
 
 impl PostgresAudit {
@@ -638,27 +644,28 @@ impl PostgresAudit {
         Self {
             pool,
             capacity: capacity.max(1),
+            insert_timeout: Duration::from_secs(10),
             writer: std::sync::OnceLock::new(),
+            dropped: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// How long one insert may take before the record is given up (default 10 s).
+    pub fn insert_timeout(mut self, timeout: Duration) -> Self {
+        self.insert_timeout = timeout;
+        self
     }
 
     fn sender(&self) -> &tokio::sync::mpsc::Sender<ExecutionRecord> {
         &self
             .writer
             .get_or_init(|| {
-                let (sender, mut receiver) = tokio::sync::mpsc::channel(self.capacity);
-                let pool = self.pool.clone();
-                let writer = tokio::spawn(async move {
-                    while let Some(record) = receiver.recv().await {
-                        if let Err(e) = insert_record(&pool, &record).await {
-                            tracing::warn!(
-                                execution_id = %record.execution_id,
-                                error = %e,
-                                "audit record was not written"
-                            );
-                        }
-                    }
-                });
+                let (sender, receiver) = tokio::sync::mpsc::channel(self.capacity);
+                let writer = tokio::spawn(write_records(
+                    self.pool.clone(),
+                    receiver,
+                    self.insert_timeout,
+                ));
                 (sender, writer)
             })
             .0
@@ -690,12 +697,51 @@ impl PostgresAudit {
 impl ExecutionSink for PostgresAudit {
     /// Runs on the execution's task, inside the runtime.
     fn record(&self, record: ExecutionRecord) {
-        if let Err(e) = self.sender().try_send(record) {
-            tracing::warn!(
-                execution_id = %e.into_inner().execution_id,
-                "audit buffer is full; record dropped"
-            );
+        use std::sync::atomic::Ordering::Relaxed;
+        use tokio::sync::mpsc::error::TrySendError;
+        match self.sender().try_send(record) {
+            Ok(()) => {
+                let dropped = self.dropped.swap(0, Relaxed);
+                if dropped > 0 {
+                    tracing::warn!(dropped, "audit writer caught up; records were dropped");
+                }
+            }
+            Err(e) => {
+                if self.dropped.fetch_add(1, Relaxed) > 0 {
+                    return;
+                }
+                match e {
+                    TrySendError::Full(r) => tracing::warn!(
+                        execution_id = %r.execution_id,
+                        "audit buffer is full; dropping records until the writer catches up"
+                    ),
+                    TrySendError::Closed(r) => tracing::error!(
+                        execution_id = %r.execution_id,
+                        "audit writer has stopped; records are being dropped"
+                    ),
+                }
+            }
         }
+    }
+}
+
+/// The writer: one insert at a time, each bounded, so a stuck one is given up.
+async fn write_records(
+    pool: PgPool,
+    mut receiver: tokio::sync::mpsc::Receiver<ExecutionRecord>,
+    timeout: Duration,
+) {
+    while let Some(record) = receiver.recv().await {
+        let error = match tokio::time::timeout(timeout, insert_record(&pool, &record)).await {
+            Ok(Ok(())) => continue,
+            Ok(Err(e)) => e.to_string(),
+            Err(_) => format!("insert timed out after {timeout:?}"),
+        };
+        tracing::warn!(
+            execution_id = %record.execution_id,
+            error = %error,
+            "audit record was not written"
+        );
     }
 }
 

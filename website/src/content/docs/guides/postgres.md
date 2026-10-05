@@ -106,8 +106,10 @@ replay, `IDEMPOTENCY_CONFLICT`, `EXECUTION_UNCERTAIN`. See [Idempotency](/guides
 ## Audit
 
 Executions never wait on the database: records go through a bounded channel to one
-writer task. When the channel is full, a record is dropped and a warning logged. See
-[Audit](/guides/audit/).
+writer task. Each insert has a time limit (10 s by default, `insert_timeout` to change
+it), so a connection that stops answering loses that one record instead of stalling the
+writer. When the channel is full, records are dropped, with one warning when dropping
+starts and one, with the count, when it stops. See [Audit](/guides/audit/).
 
 ## Retention
 
