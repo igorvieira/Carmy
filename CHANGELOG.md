@@ -6,6 +6,15 @@ All notable changes to Carmy are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- `PostgresAudit` no longer stops for good when one insert hangs: each insert has a time
+  limit (10 s, `insert_timeout` to change it), and the record is given up instead. Before,
+  a connection that stopped answering stalled the writer, the buffer filled, and every
+  later record was dropped (#1).
+- A full audit buffer logs one warning when dropping starts and one, with the count, when
+  it stops, instead of one per record; a stopped writer is reported as such.
+
 ## [0.6.0] - 2026-09-27
 
 ### Added

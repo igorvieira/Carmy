@@ -110,8 +110,11 @@ store em memória: replay, `IDEMPOTENCY_CONFLICT`, `EXECUTION_UNCERTAIN`. Veja
 ## Auditoria
 
 As execuções nunca esperam o banco: os registros passam por um canal limitado até uma
-task que escreve. Quando o canal enche, um registro é descartado e um aviso vai para o
-log. Veja [Auditoria](/pt-br/guides/audit/).
+task que escreve. Cada insert tem tempo limite (10 s por padrão, `insert_timeout` para
+mudar), então uma conexão que para de responder perde só aquele registro em vez de
+travar a task. Quando o canal enche, os registros são descartados, com um aviso quando o
+descarte começa e outro, com a contagem, quando termina. Veja
+[Auditoria](/pt-br/guides/audit/).
 
 ## Retenção
 
