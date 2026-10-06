@@ -1,0 +1,412 @@
+---
+// The home page, outside Starlight's splash template: a poster in the illustration's
+// language. Copy lives here per locale; docs links follow the locale's prefix.
+import '../styles/home.css';
+import { fontLinks } from '../fonts';
+
+interface Props {
+  lang: 'en' | 'pt-BR';
+}
+const { lang } = Astro.props;
+const pt = lang === 'pt-BR';
+const base = pt ? '/pt-br' : '';
+const docs = `${base}/getting-started/quick-start/`;
+
+const t = pt
+  ? {
+      title: 'Carmy: efeitos colaterais não deveriam ser probabilísticos',
+      description:
+        'O Carmy é a camada de execução entre agentes de IA e sistemas reais, em Rust: tools tipadas, efeitos explícitos, retries seguros e o mesmo código servido por HTTP e MCP.',
+      nav: { why: 'Por quê', tools: 'Tools', transports: 'Transportes', docs: 'Docs' },
+      other: { href: '/', label: 'English' },
+      kicker: ['O raciocínio de um LLM', 'pode ser probabilístico.'],
+      headline: ['Os efeitos', 'colaterais,', 'não.'],
+      lead: 'O Carmy fica entre um agente de IA e os sistemas que ele altera. Uma tool é uma função Rust tipada. Ela diz o que toca, falha com erros que um programa sabe tratar e roda uma vez só, mesmo quando o agente pede duas. O mesmo código responde por HTTP e por MCP.',
+      start: 'Comece em cinco minutos',
+      copy: 'Copiar',
+      copied: 'Copiado',
+      selected: 'Selecionado',
+      why: {
+        eyebrow: 'Por que ele existe',
+        title: 'Um retry não deveria reembolsar duas vezes.',
+        intro:
+          'Agentes repetem a chamada sempre que ela estoura o tempo. A primeira pode já ter feito o trabalho. Este é o pedido 4127, reembolsado por um provedor de pagamentos, com e sem o Carmy no meio.',
+        without: 'Sem o Carmy',
+        with: 'Com o Carmy',
+        result: 'resultado',
+        withoutRows: [
+          ['Agente chama <code>refund_order(4127, R$ 189,90)</code>'],
+          ['Provedor faz o reembolso'],
+          ['Conexão estoura o tempo antes da resposta chegar'],
+          ['Agente repete a mesma chamada'],
+          ['Provedor faz o reembolso de novo'],
+        ],
+        withRows: [
+          ['Agente chama <code>refund_order</code> com <code>request_id "refund-4127"</code>'],
+          ['Provedor faz o reembolso; o Carmy grava o resultado'],
+          ['Conexão estoura o tempo antes da resposta chegar'],
+          ['Agente repete com o mesmo <code>request_id</code>'],
+          ['O Carmy devolve o resultado gravado; o provedor não é chamado'],
+        ],
+        stampWithout: 'Reembolsado ×2 · R$ 379,80',
+        stampWith: 'Reembolsado ×1 · R$ 189,90',
+      },
+      tools: {
+        eyebrow: 'O que toda tool ganha',
+        title: 'Três garantias, de um atributo.',
+        one: {
+          title: 'Os tipos são o contrato.',
+          body: 'Entrada e saída são tipos Rust. Os JSON Schemas saem dos tipos e dos seus comentários de documentação, então um agente chama a tool sem ler a sua documentação.',
+        },
+        two: {
+          title: 'Toda tool diz o que toca.',
+          body: 'O efeito é <code>none</code>, <code>read</code>, <code>write</code>, <code>external_write</code> ou <code>destructive</code>. Uma tool destrutiva só roda quando o host, e não o agente, concede a confirmação.',
+          answer: 'O agente recebe, sem confirmação',
+        },
+        three: {
+          title: 'O agente repete. O trabalho roda uma vez.',
+          body: 'Um <code>request_id</code> repetido devolve o resultado gravado, com o mesmo <code>execution_id</code>. A tool não roda de novo, em uma instância ou em dez.',
+          request: 'Requisição, enviada duas vezes',
+          answer: 'Segunda resposta',
+          note: '# devolvido, mesmo execution_id',
+        },
+        label: 'Tool',
+      },
+      transports: {
+        eyebrow: 'Como ele é feito',
+        title: 'Um runtime. Todas as entradas.',
+        intro:
+          'HTTP e MCP são adaptadores finos sobre o mesmo runtime. Políticas, idempotência, auditoria e cancelamento ficam no runtime, então valem do mesmo jeito por onde quer que o agente chegue.',
+        alt: 'As suas tools alimentam o runtime do Carmy, que serve HTTP com SSE, MCP, o console e jobs em segundo plano',
+        code: 'SEU CÓDIGO',
+        console: 'CONSOLE',
+        jobs: 'JOBS',
+      },
+      footer: { sponsor: 'Apoie' },
+    }
+  : {
+      title: 'Carmy: side effects should not be probabilistic',
+      description:
+        'Carmy is the execution layer between AI agents and real systems, in Rust: typed tools, explicit effects, safe retries, and the same code served over HTTP and MCP.',
+      nav: { why: 'Why', tools: 'Tools', transports: 'Transports', docs: 'Docs' },
+      other: { href: '/pt-br/', label: 'Português' },
+      kicker: ['LLM reasoning', 'can be probabilistic.'],
+      headline: ['Side effects', 'should not', 'be.'],
+      lead: 'Carmy sits between an AI agent and the systems it changes. A tool is a typed Rust function. It says what it touches, fails with errors a program can act on, and runs once even when the agent asks twice. The same code answers over HTTP and MCP.',
+      start: 'Start in five minutes',
+      copy: 'Copy',
+      copied: 'Copied',
+      selected: 'Selected',
+      why: {
+        eyebrow: 'Why it exists',
+        title: 'A retry should not refund twice.',
+        intro:
+          'Agents retry whenever a call times out. The first call may already have done its work. Here is order 4127, refunded through a payment provider, with and without Carmy in the middle.',
+        without: 'Without Carmy',
+        with: 'With Carmy',
+        result: 'result',
+        withoutRows: [
+          ['Agent calls <code>refund_order(4127, $189.90)</code>'],
+          ['Provider issues the refund'],
+          ['Connection times out before the answer arrives'],
+          ['Agent retries the same call'],
+          ['Provider issues the refund again'],
+        ],
+        withRows: [
+          ['Agent calls <code>refund_order</code> with <code>request_id "refund-4127"</code>'],
+          ['Provider issues the refund; Carmy records the result'],
+          ['Connection times out before the answer arrives'],
+          ['Agent retries with the same <code>request_id</code>'],
+          ['Carmy replays the recorded result; the provider is not called'],
+        ],
+        stampWithout: 'Refunded ×2 · $379.80',
+        stampWith: 'Refunded ×1 · $189.90',
+      },
+      tools: {
+        eyebrow: 'What every tool gets',
+        title: 'Three guarantees, from one attribute.',
+        one: {
+          title: 'The types are the contract.',
+          body: 'Input and output are Rust types. Their JSON Schemas are derived from the types and their doc comments, so an agent can call the tool without reading your docs.',
+        },
+        two: {
+          title: 'Every tool says what it touches.',
+          body: 'An effect is one of <code>none</code>, <code>read</code>, <code>write</code>, <code>external_write</code> or <code>destructive</code>. A destructive tool does not run until the host, not the agent, grants a confirmation.',
+          answer: 'The agent gets, without confirmation',
+        },
+        three: {
+          title: 'Agents retry. The work runs once.',
+          body: 'A repeated <code>request_id</code> replays the recorded result, with the same <code>execution_id</code>. The tool does not run again, on one instance or on ten.',
+          request: 'Request, sent twice',
+          answer: 'Second answer',
+          note: '# replayed, same execution_id',
+        },
+        label: 'Tool',
+      },
+      transports: {
+        eyebrow: 'How it is built',
+        title: 'One runtime. Every way in.',
+        intro:
+          'HTTP and MCP are thin adapters over the same runtime. Policies, idempotency, audit and cancellation live in the runtime, so they apply the same way however the agent arrives.',
+        alt: 'Your tools feed the Carmy runtime, which serves HTTP with SSE, MCP, the console and background jobs',
+        code: 'YOUR CODE',
+        console: 'CONSOLE',
+        jobs: 'JOBS',
+      },
+      footer: { sponsor: 'Sponsor' },
+    };
+
+const times = ['14:02:07.112', '14:02:07.480', '14:02:17.112', '14:02:17.400'];
+const withoutTimes = [...times, '14:02:17.790'];
+const withTimes = [...times, '14:02:17.403'];
+const version = '0.6.1';
+---
+
+<!doctype html>
+<html lang={lang} dir="ltr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{t.title}</title>
+    <meta name="description" content={t.description} />
+    <link rel="icon" href="/favicon.png" type="image/png" />
+    {fontLinks.map((attrs) => <link {...attrs} />)}
+    <link rel="alternate" hreflang="en" href="https://carmy-pi.vercel.app/" />
+    <link rel="alternate" hreflang="pt-BR" href="https://carmy-pi.vercel.app/pt-br/" />
+    <meta property="og:title" content={t.title} />
+    <meta property="og:description" content={t.description} />
+    <meta property="og:image" content="https://carmy-pi.vercel.app/brand/lockup.png" />
+    {/* Same storage key as Starlight's theme picker, so the docs' choice carries over. */}
+    <script is:inline>
+      (() => {
+        let stored = null;
+        try {
+          stored = localStorage.getItem('starlight-theme');
+        } catch {}
+        const theme =
+          stored === 'light' || stored === 'dark'
+            ? stored
+            : matchMedia('(prefers-color-scheme: light)').matches
+              ? 'light'
+              : 'dark';
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
+  </head>
+  <body class="carmy-home">
+    <header class="wrap bar">
+      <a class="mark" href={`${base}/`}><i></i>CARMY</a>
+      <nav aria-label="Main">
+        <a class="wide" href="#refund">{t.nav.why}</a>
+        <a class="wide" href="#tools">{t.nav.tools}</a>
+        <a class="wide" href="#transports">{t.nav.transports}</a>
+        <a href={docs}>{t.nav.docs}</a>
+        <a href="https://github.com/igorvieira/Carmy">GitHub</a>
+        <a class="lang" href={t.other.href} hreflang={pt ? 'en' : 'pt-BR'}>{t.other.label}</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <div class="wrap hero">
+        <div class:list={["hero-grid", { long: pt }]}>
+          <div class="band" aria-hidden="true"></div>
+          <div>
+            <p class="kicker"><b>{t.kicker[0]}</b> {t.kicker[1]}</p>
+            <h1 class:list={["headline", { long: pt }]}>
+              {t.headline[0]} <span class="cut">{t.headline[1]}</span> {t.headline[2]}
+            </h1>
+          </div>
+          <div class="chef">
+            <img class="light" src="/brand/chef-light.png" width="820" height="492" alt="A chef placing a red cube on a straight rail" />
+            <img class="dark" src="/brand/chef-dark.jpg" width="690" height="382" alt="A chef placing a red cube on a straight rail" />
+          </div>
+        </div>
+        <div class="lead-row">
+          <p class="lead">{t.lead}</p>
+          <div class="start">
+            <a class="btn" href={docs}>{t.start} <span aria-hidden="true">→</span></a>
+            <div class="cmd">
+              <code id="install">cargo install carmy-cli</code>
+              <button type="button" id="copy" data-copy={t.copy} data-copied={t.copied} data-selected={t.selected}>{t.copy}</button>
+            </div>
+            <p class="meta">Rust 1.88+ · MIT · {version} <a href="https://crates.io/crates/carmy">crates.io</a></p>
+          </div>
+        </div>
+      </div>
+
+      <section class="block wrap" id="refund">
+        <div class="rail" aria-hidden="true"></div>
+        <p class="eyebrow">{t.why.eyebrow}</p>
+        <h2>{t.why.title}</h2>
+        <p class="intro">{t.why.intro}</p>
+        <div class="ledger">
+          <div class="without">
+            <h3>{t.why.without}</h3>
+            <ol>
+              {t.why.withoutRows.map(([row], i) => (
+                <li><time>{withoutTimes[i]}</time><span set:html={row} /></li>
+              ))}
+              <li class="total"><time>{t.why.result}</time><span><span class="stamp">{t.why.stampWithout}</span></span></li>
+            </ol>
+          </div>
+          <div class="with">
+            <h3>{t.why.with}</h3>
+            <ol>
+              {t.why.withRows.map(([row], i) => (
+                <li><time>{withTimes[i]}</time><span set:html={row} /></li>
+              ))}
+              <li class="total"><time>{t.why.result}</time><span><span class="stamp">{t.why.stampWith}</span></span></li>
+            </ol>
+          </div>
+        </div>
+      </section>
+
+      <section class="block wrap" id="tools">
+        <div class="rail" aria-hidden="true"></div>
+        <p class="eyebrow">{t.tools.eyebrow}</p>
+        <h2>{t.tools.title}</h2>
+        <div>
+          <article class="station">
+            <div>
+              <p class="num" aria-hidden="true">01</p>
+              <h3>{t.tools.one.title}</h3>
+              <p>{t.tools.one.body}</p>
+            </div>
+            <div class="pair">
+              <span class="label">{t.tools.label}</span>
+<pre><span class="k">#[derive(Deserialize, JsonSchema)]</span>
+struct CreateOrder {'{'}
+    <span class="c">/// Product SKU.</span>
+    sku: String,
+    quantity: u32,
+{'}'}
+
+<span class="k">#[carmy::tool(description = "Place an order", effect = "write")]</span>
+async fn create_order(input: CreateOrder) -&gt; AgentResult&lt;Order&gt; {'{'}
+    Ok(Order {'{'} order_id: 1 {'}'})
+{'}'}</pre>
+            </div>
+          </article>
+
+          <article class="station">
+            <div>
+              <p class="num" aria-hidden="true">02</p>
+              <h3>{t.tools.two.title}</h3>
+              <p set:html={t.tools.two.body} />
+            </div>
+            <div class="pair">
+              <span class="label">{t.tools.label}</span>
+<pre><span class="k">#[carmy::tool(
+    description = "Delete a customer permanently",
+    effect = "destructive",
+    confirmation = "required"
+)]</span>
+async fn delete_customer(input: CustomerId) -&gt; AgentResult&lt;()&gt;</pre>
+              <span class="label">{t.tools.two.answer}</span>
+<pre>{'{'} "error": {'{'} "code": "CONFIRMATION_REQUIRED", "category": "permission",
+  "recoverable": false, "retryable": false,
+  "message": "Trusted confirmation is required" {'}'} {'}'}</pre>
+            </div>
+          </article>
+
+          <article class="station">
+            <div>
+              <p class="num" aria-hidden="true">03</p>
+              <h3>{t.tools.three.title}</h3>
+              <p set:html={t.tools.three.body} />
+            </div>
+            <div class="pair">
+              <span class="label">{t.tools.three.request}</span>
+<pre>{'{'} "tool": "create_order", "arguments": {'{'} "sku": "KB-01" {'}'},
+  "request_id": "order-7f3" {'}'}</pre>
+              <span class="label">{t.tools.three.answer}</span>
+<pre>{'{'}"execution_id":"exec_d8df…","status":"completed",
+ "data":{'{'}"order_id":1{'}'},…{'}'}   <span class="c">{t.tools.three.note}</span></pre>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="block wrap" id="transports">
+        <div class="rail" aria-hidden="true"></div>
+        <p class="eyebrow">{t.transports.eyebrow}</p>
+        <h2>{t.transports.title}</h2>
+        <p class="intro">{t.transports.intro}</p>
+        <div class="diagram">
+          <svg viewBox="0 0 960 320" role="img" aria-label={t.transports.alt}>
+            <g class="lines" fill="none" stroke-width="3">
+              <rect x="8" y="110" width="200" height="100" />
+              <rect class="core" x="300" y="70" width="320" height="180" />
+              <line x1="208" y1="160" x2="300" y2="160" />
+              <line x1="620" y1="160" x2="680" y2="160" />
+              <line x1="680" y1="40" x2="680" y2="280" />
+              <line x1="680" y1="40" x2="720" y2="40" />
+              <line x1="680" y1="120" x2="720" y2="120" />
+              <line x1="680" y1="200" x2="720" y2="200" />
+              <line x1="680" y1="280" x2="720" y2="280" />
+              <rect x="720" y="16" width="232" height="48" />
+              <rect x="720" y="96" width="232" height="48" />
+              <rect x="720" y="176" width="232" height="48" />
+              <rect x="720" y="256" width="232" height="48" />
+            </g>
+            <rect class="cube" x="286" y="152" width="16" height="16" />
+            <g class="ink" font-size="15" font-weight="800">
+              <text class="dim" x="26" y="150" font-size="13" font-weight="700" letter-spacing="1.5">{t.transports.code}</text>
+              <text x="26" y="180" font-size="22" font-weight="900">#[carmy::tool]</text>
+              <text x="740" y="46">HTTP + SSE</text>
+              <text x="740" y="126">MCP</text>
+              <text x="740" y="206">{t.transports.console}</text>
+              <text x="740" y="286">{t.transports.jobs}</text>
+            </g>
+            <g class="paper">
+              <text class="accent" x="324" y="112" font-size="13" font-weight="700" letter-spacing="1.5">CARMY RUNTIME</text>
+              <text x="324" y="150" font-size="20" font-weight="900">schemas · effects · policy</text>
+              <text x="324" y="182" font-size="20" font-weight="900">idempotency · audit</text>
+              <text x="324" y="214" font-size="20" font-weight="900">deadlines · cancellation</text>
+            </g>
+          </svg>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="wrap">
+        <p class="big">CARMY</p>
+        <div class="foot-row">
+          <p class="backronym">Composable Agent Runtime for Managed Yield</p>
+          <div>
+            <ul>
+              <li><a href={docs}>Docs →</a></li>
+              <li><a href="https://github.com/igorvieira/Carmy">GitHub →</a></li>
+              <li><a href="https://crates.io/crates/carmy">crates.io →</a></li>
+              <li><a href={`${base}/sponsor/`}>{t.footer.sponsor} →</a></li>
+            </ul>
+            <small>MIT · Rust 1.88+ · {version}</small>
+          </div>
+        </div>
+      </div>
+    </footer>
+
+    <script>
+      const button = document.getElementById('copy') as HTMLButtonElement | null;
+      const install = document.getElementById('install');
+      button?.addEventListener('click', async () => {
+        const reset = () => setTimeout(() => (button.textContent = button.dataset.copy ?? ''), 1600);
+        try {
+          await navigator.clipboard.writeText(install?.textContent ?? '');
+          button.textContent = button.dataset.copied ?? '';
+        } catch {
+          if (install) {
+            const range = document.createRange();
+            range.selectNodeContents(install);
+            const selection = getSelection();
+            selection?.removeAllRanges();
+            selection?.addRange(range);
+          }
+          button.textContent = button.dataset.selected ?? '';
+        }
+        reset();
+      });
+    </script>
+  </body>
+</html>

@@ -1,9 +1,16 @@
-/* Carmy palette: Rust Clay accent, Steel Black, Kitchen Light, Graphite. */
+/* Carmy palette: Rust Clay accent, Steel Black, Kitchen Light, Graphite.
+   The docs share the home page's type and colors (src/styles/home.css): Archivo at
+   expanded widths for display, Instrument Sans for text, JetBrains Mono for code. */
 :root {
+  --carmy-display: 'Archivo', 'Arial Black', 'Helvetica Neue', Arial, sans-serif;
+  --carmy-clay: #d9543f;
+  --sl-font: 'Instrument Sans', 'Helvetica Neue', Arial, sans-serif;
+  --sl-font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+
   --sl-color-accent-low: #3a1510;
   --sl-color-accent: #d9543f;
   --sl-color-accent-high: #f6c9c1;
-  --sl-color-white: #f7f4ed;
+  --sl-color-white: #efe9dd;
   --sl-color-gray-1: #e6e2d9;
   --sl-color-gray-2: #c4c7cd;
   --sl-color-gray-3: #9aa0aa;
@@ -13,29 +20,64 @@
   --sl-color-black: #0a0909; /* matches the dark illustration's background */
 }
 :root[data-theme='light'] {
+  --carmy-clay: #b23a2b;
   --sl-color-accent-low: #f3d5cf;
   --sl-color-accent: #b23a2b;
   --sl-color-accent-high: #5c1b13;
-  --sl-color-white: #0e0f10;
+  --sl-color-white: #0f0e0d;
   --sl-color-gray-1: #1a1c1f;
   --sl-color-gray-2: #2c2f35;
   --sl-color-gray-3: #4b5563;
   --sl-color-gray-4: #6b7280;
   --sl-color-gray-5: #cfccc4;
-  --sl-color-gray-6: #ece8df;
-  --sl-color-gray-7: #f2efe8;
-  --sl-color-black: #f7f4ed;
+  --sl-color-gray-6: #e4dccc;
+  --sl-color-gray-7: #e9e2d4;
+  --sl-color-black: #efe9dd; /* the home page's paper */
 }
-.hero .hero-html {
-  width: min(100%, 34rem);
+
+/* Headings in the poster's display face. */
+.sl-markdown-content :is(h2, h3, h4),
+.content-panel h1 {
+  font-family: var(--carmy-display);
+  font-stretch: 112%;
+  font-weight: 800;
+  letter-spacing: -0.005em;
+  text-wrap: balance;
 }
-.hero .hero-html img {
-  width: 100%;
-  height: auto;
+.content-panel h1 {
+  font-stretch: 118%;
+  font-weight: 900;
+  text-transform: uppercase;
+  line-height: 0.95;
+  padding-bottom: 0.9rem;
+  border-bottom: 6px solid var(--sl-color-white);
 }
-.site-title img {
-  border-radius: 6px;
+.sl-markdown-content h2 {
+  text-transform: uppercase;
+  font-size: var(--sl-text-h3);
 }
+.sl-markdown-content .sl-heading-wrapper.level-h2 {
+  padding-top: 0.75rem;
+  border-top: 3px solid var(--sl-color-white);
+}
+
+/* The current page in the sidebar, in clay on both themes. */
+.sidebar-content a[aria-current='page'],
+.sidebar-content a[aria-current='page']:hover {
+  background: var(--carmy-clay);
+  color: #f7f4ed;
+}
+
+/* The header rests on a heavy rule, like the home page's bar. */
+header.header {
+  border-bottom: 3px solid var(--sl-color-white);
+}
+
+/* Code frames carry the home page's clay edge. */
+.expressive-code .frame {
+  border-left: 6px solid var(--carmy-clay);
+}
+
 /* Primary actions always use Rust Clay. */
 .sl-link-button.primary {
   background: #b23a2b;
