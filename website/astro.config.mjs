@@ -1,6 +1,7 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import { fontLinks } from './src/fonts';
 
 const group = (label, pt, directory) => ({
   label,
@@ -15,7 +16,6 @@ export default defineConfig({
       title: 'Carmy',
       description:
         'Composable Agent Runtime for Managed Yield: deterministic, safe execution infrastructure for AI agents in Rust.',
-      logo: { src: './src/assets/icon.png', alt: 'Carmy' },
       favicon: '/favicon.png',
       defaultLocale: 'root',
       locales: {
@@ -28,6 +28,8 @@ export default defineConfig({
         // { icon: 'discord', label: 'Discord', href: 'https://discord.gg/...' },
       ],
       editLink: { baseUrl: 'https://github.com/igorvieira/Carmy/edit/main/website/' },
+      head: fontLinks.map((attrs) => ({ tag: 'link', attrs })),
+      components: { SiteTitle: './src/components/SiteTitle.astro' },
       customCss: ['./src/styles/carmy.css'],
       sidebar: [
         group('Getting started', 'Primeiros passos', 'getting-started'),

@@ -1,0 +1,28 @@
+---
+// The docs' site title, set like the home page's mark: a clay cube and the wordmark.
+const { siteTitle, siteTitleHref } = Astro.locals.starlightRoute;
+---
+
+<a href={siteTitleHref} class="carmy-mark" translate="no"><i aria-hidden="true"></i>{siteTitle}</a>
+
+<style>
+  .carmy-mark {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-family: var(--carmy-display);
+    font-weight: 900;
+    font-stretch: 125%;
+    font-size: 1.25rem;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--sl-color-white);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  i {
+    width: 0.8rem;
+    height: 0.8rem;
+    background: var(--carmy-clay);
+  }
+</style>
